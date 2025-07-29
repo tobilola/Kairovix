@@ -275,17 +275,24 @@ except Exception as e:
     st.error(f"Error loading calendar: {e}")
 
 # -----------------------------
-# 📊 Upgraded Analytics Dashboard (with drill-down + CSV export)
+# 📊 Upgraded Analytics Dashboard (with global CSV + cancel)
 # -----------------------------
 import io
 
 st.markdown("---")
 st.subheader("📊 Analytics Dashboard")
 
-# -----------------------------
-# Global CSV export for all bookings
-# -----------------------------
-if all_bookings:
+# Fetch all bookings once at the top
+all_bookings = []
+try:
+    all_bookings = list(db.collection("bookings").stream())
+except Exception as e:
+    st.error(f"Error fetching bookings: {e}")
+
+if not all_bookings:
+    st.info("No bookings yet.")
+else:
+    # --- Global CSV export ---
     all_rows = []
     for bk in all_bookings:
         d = bk.to_dict()
