@@ -55,3 +55,24 @@ if st.checkbox("📋 Show Recent Bookings"):
         data = booking.to_dict()
         st.markdown(f"🔹 **{data['equipment']}** booked by **{data['name']}** on **{data['date']} at {data['time']}**")
 
+st.markdown("---")
+st.subheader("📋 Upcoming Bookings")
+
+# Fetch and display bookings from Firestore
+try:
+    bookings_ref = db.collection("bookings").order_by(
+        "timestamp", direction=firestore.Query.DESCENDING
+    )
+    bookings = bookings_ref.stream()
+
+    data = []
+    for booking in bookings:
+        b = booking.to_dict()
+        data.append([b["name"], b["equipment"], b["date"], b["time"]])
+
+    if data:
+        st.table(data)
+    else:
+        st.info("No bookings yet. Submit a booking above.")
+except Exception as e:
+    st.error(f"Error loading bookings: {e}")
