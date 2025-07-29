@@ -275,48 +275,77 @@ except Exception as e:
     st.error(f"Error loading calendar: {e}")
 
 # -----------------------------
-# 📊 Analytics Dashboard (with charts)
+# 📊 Upgraded Analytics Dashboard (with drill-down)
 # -----------------------------
 st.markdown("---")
 st.subheader("📊 Analytics Dashboard")
 
 try:
-    all_stream = db.collection("bookings").stream()
+    all_bookings = list(db.collection("bookings").stream())
 
-    total_bookings = 0
-    equipment_usage = {}
-    hourly_usage = {}
+    if not all_bookings:
+        st.info("No bookings yet.")
+    else:
+        # Summary counts
+        total_bookings = len(all_bookings)
+        equipment_usage = {}
+        hourly_usage = {}
 
-    for bk in all_stream:
-        d = bk.to_dict()
-        total_bookings += 1
+        for bk in all_bookings:
+            d = bk.to_dict()
+            eq = d.get("equipment", "Unknown")
+            equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
 
-        eq = d.get("equipment", "Unknown")
-        equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
+            t = d.get("time", "00:00")
+            hour = t[:2]
+            hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
 
-        # Expect "HH:MM" string
-        t = d.get("time", "00:00")
-        hour = t[:2]
-        hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
+        st.metric("Total Bookings", total_bookings)
 
-    # Top metric
-    st.metric("Total Bookings", total_bookings)
+        # Equipment usage table with drill-down
+        st.markdown("### Equipment Usage")
+        for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
+            col1, col2 = st.columns([3,1])
+            col1.write(f"**{eq}:** {count} bookings")
+            if col2.button(f"Details", key=f"{eq}_details"):
+                # Drill-down for this equipment
+                st.markdown(f"#### Details for {eq}")
+                detailed_rows = []
+                for bk in all_bookings:
+                    d = bk.to_dict()
+                    if d.get("equipment") == eq:
+                        detailed_rows.append([
+                            d.get("name", ""),
+                            d.get("date", ""),
+                            d.get("time", ""),
+                            d.get("slot", "—") if eq == "IncuCyte" else "—"
+                        ])
+                
+                if detailed_rows:
+                    st.table(
+                        pd.DataFrame(
+                            detailed_rows,
+                            columns=["User", "Date", "Time", "Slot"]
+                        )
+                    )
+                else:
+                    st.info(f"No bookings found for {eq}")
 
-    # Equipment usage bar chart
-    if equipment_usage:
-        st.markdown("### Most Used Equipment")
-        eq_df = pd.DataFrame(
-            [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
-        ).sort_values("Bookings", ascending=False)
-        st.bar_chart(eq_df.set_index("Equipment"))
+        # Charts
+        if equipment_usage:
+            st.markdown("### Most Used Equipment (chart)")
+            eq_df = pd.DataFrame(
+                [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
+            ).sort_values("Bookings", ascending=False)
+            st.bar_chart(eq_df.set_index("Equipment"))
 
-    # Peak hours bar chart
-    if hourly_usage:
-        st.markdown("### Peak Booking Hours")
-        hr_df = pd.DataFrame(
-            [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
-        ).sort_values("Hour")
-        st.bar_chart(hr_df.set_index("Hour"))
+        if hourly_usage:
+            st.markdown("### Peak Booking Hours (chart)")
+            hr_df = pd.DataFrame(
+                [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
+            ).sort_values("Hour")
+            st.bar_chart(hr_df.set_index("Hour"))
 
 except Exception as e:
     st.error(f"Error loading analytics: {e}")
+
