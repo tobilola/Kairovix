@@ -275,8 +275,10 @@ except Exception as e:
     st.error(f"Error loading calendar: {e}")
 
 # -----------------------------
-# 📊 Upgraded Analytics Dashboard (with drill-down)
+# 📊 Upgraded Analytics Dashboard (with drill-down + CSV export)
 # -----------------------------
+import io
+
 st.markdown("---")
 st.subheader("📊 Analytics Dashboard")
 
@@ -322,11 +324,20 @@ try:
                         ])
                 
                 if detailed_rows:
-                    st.table(
-                        pd.DataFrame(
-                            detailed_rows,
-                            columns=["User", "Date", "Time", "Slot"]
-                        )
+                    df = pd.DataFrame(
+                        detailed_rows,
+                        columns=["User", "Date", "Time", "Slot"]
+                    )
+                    st.table(df)
+
+                    # Export to CSV
+                    csv_buffer = io.StringIO()
+                    df.to_csv(csv_buffer, index=False)
+                    st.download_button(
+                        label="⬇️ Download CSV",
+                        data=csv_buffer.getvalue(),
+                        file_name=f"{eq}_bookings.csv",
+                        mime="text/csv"
                     )
                 else:
                     st.info(f"No bookings found for {eq}")
@@ -348,4 +359,3 @@ try:
 
 except Exception as e:
     st.error(f"Error loading analytics: {e}")
-
