@@ -111,3 +111,43 @@ try:
         st.info("No bookings match your filters.")
 except Exception as e:
     st.error(f"Error loading bookings: {e}")
+
+st.markdown("---")
+st.subheader("📊 Analytics Dashboard")
+
+try:
+    # Fetch all bookings
+    bookings_ref = db.collection("bookings").stream()
+
+    # Track metrics
+    total_bookings = 0
+    equipment_usage = {}
+    hourly_usage = {}
+
+    for booking in bookings_ref:
+        b = booking.to_dict()
+        total_bookings += 1
+
+        # Count equipment usage
+        equipment_usage[b["equipment"]] = equipment_usage.get(b["equipment"], 0) + 1
+
+        # Count hourly usage
+        hour = b["time"][:2]  # Extract hour from time string
+        hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
+
+    # Display metrics
+    st.metric("Total Bookings", total_bookings)
+
+    if equipment_usage:
+        st.markdown("### Most Used Equipment")
+        for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
+            st.write(f"**{eq}:** {count} bookings")
+
+    if hourly_usage:
+        st.markdown("### Peak Booking Hours")
+        for hr, count in sorted(hourly_usage.items(), key=lambda x: x[1], reverse=True):
+            st.write(f"**{hr}:00:** {count} bookings")
+
+except Exception as e:
+    st.error(f"Error loading analytics: {e}")
+
