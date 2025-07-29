@@ -275,7 +275,7 @@ except Exception as e:
     st.error(f"Error loading calendar: {e}")
 
 # -----------------------------
-# 📊 Upgraded Analytics Dashboard (with global CSV + cancel)
+# 📊 Full Analytics Dashboard (Global CSV + Drill-down + Cancel + Charts)
 # -----------------------------
 import io
 
@@ -318,82 +318,73 @@ else:
             mime="text/csv"
         )
 
-try:
-    all_bookings = list(db.collection("bookings").stream())
+    # --- Summary metrics ---
+    total_bookings = len(all_bookings)
+    equipment_usage = {}
+    hourly_usage = {}
 
-    if not all_bookings:
-        st.info("No bookings yet.")
-    else:
-        # Summary counts
-        total_bookings = len(all_bookings)
-        equipment_usage = {}
-        hourly_usage = {}
+    for bk in all_bookings:
+        d = bk.to_dict()
+        eq = d.get("equipment", "Unknown")
+        equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
 
-        for bk in all_bookings:
-            d = bk.to_dict()
-            eq = d.get("equipment", "Unknown")
-            equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
+        t = d.get("time", "00:00")
+        hour = t[:2]
+        hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
 
-            t = d.get("time", "00:00")
-            hour = t[:2]
-            hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
+    st.metric("Total Bookings", total_bookings)
 
-        st.metric("Total Bookings", total_bookings)
+    # --- Drill-down with cancel controls ---
+    st.markdown("### Equipment Usage")
+    for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
+        col1, col2 = st.columns([3, 1])
+        col1.write(f"**{eq}:** {count} bookings")
+        if col2.button(f"Details", key=f"{eq}_details"):
+            st.markdown(f"#### Details for {eq}")
 
-      # Equipment usage table with drill-down + cancel option
-st.markdown("### Equipment Usage")
-for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
-    col1, col2 = st.columns([3, 1])
-    col1.write(f"**{eq}:** {count} bookings")
-    if col2.button(f"Details", key=f"{eq}_details"):
-        st.markdown(f"#### Details for {eq}")
+            # Build table data
+            detailed_rows = []
+            for bk in all_bookings:
+                d = bk.to_dict()
+                if d.get("equipment") == eq:
+                    detailed_rows.append({
+                        "id": bk.id,
+                        "name": d.get("name", ""),
+                        "date": d.get("date", ""),
+                        "time": d.get("time", ""),
+                        "slot": d.get("slot", "—") if eq == "IncuCyte" else "—"
+                    })
 
-        # Build table data
-        detailed_rows = []
-        for bk in all_bookings:
-            d = bk.to_dict()
-            if d.get("equipment") == eq:
-                detailed_rows.append({
-                    "id": bk.id,
-                    "name": d.get("name", ""),
-                    "date": d.get("date", ""),
-                    "time": d.get("time", ""),
-                    "slot": d.get("slot", "—") if eq == "IncuCyte" else "—"
-                })
+            if detailed_rows:
+                for row in detailed_rows:
+                    c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 2, 1])
+                    c1.write(row["name"])
+                    c2.write(row["date"])
+                    c3.write(row["time"])
+                    c4.write(row["slot"])
 
-        if detailed_rows:
-            for row in detailed_rows:
-                c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 2, 1])
-                c1.write(row["name"])
-                c2.write(row["date"])
-                c3.write(row["time"])
-                c4.write(row["slot"])
+                    # Cancel button
+                    if c5.button("❌", key=f"cancel_{row['id']}"):
+                        try:
+                            db.collection("bookings").document(row["id"]).delete()
+                            st.success(f"Booking for {row['name']} on {row['date']} at {row['time']} cancelled.")
+                            st.experimental_rerun()
+                        except Exception as e:
+                            st.error(f"Error cancelling booking: {e}")
+            else:
+                st.info(f"No bookings found for {eq}")
 
-                # Cancel button
-                if c5.button("❌", key=f"cancel_{row['id']}"):
-                    try:
-                        db.collection("bookings").document(row["id"]).delete()
-                        st.success(f"Booking for {row['name']} on {row['date']} at {row['time']} cancelled.")
-                        st.experimental_rerun()
-                    except Exception as e:
-                        st.error(f"Error cancelling booking: {e}")
-        else:
-            st.info(f"No bookings found for {eq}")
+    # --- Charts ---
+    if equipment_usage:
+        st.markdown("### Most Used Equipment (chart)")
+        eq_df = pd.DataFrame(
+            [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
+        ).sort_values("Bookings", ascending=False)
+        st.bar_chart(eq_df.set_index("Equipment"))
 
-        # Charts
-        if equipment_usage:
-            st.markdown("### Most Used Equipment (chart)")
-            eq_df = pd.DataFrame(
-                [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
-            ).sort_values("Bookings", ascending=False)
-            st.bar_chart(eq_df.set_index("Equipment"))
-
-        if hourly_usage:
-            st.markdown("### Peak Booking Hours (chart)")
-            hr_df = pd.DataFrame(
-                [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
-            ).sort_values("Hour")
-            st.bar_chart(hr_df.set_index("Hour"))
-
-except Exception as e:
-    st.error(f"Error loading analytics: {e}")
+    if hourly_usage:
+        st.markdown("### Peak Booking Hours (chart)")
+        hr_df = pd.DataFrame(
+            [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
+        ).sort_values("Hour")
+        st.bar_chart(hr_df.set_index("Hour"))
