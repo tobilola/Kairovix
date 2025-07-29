@@ -333,43 +333,45 @@ try:
 
         st.metric("Total Bookings", total_bookings)
 
-        # Equipment usage table with drill-down
-        st.markdown("### Equipment Usage")
-        for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
-            col1, col2 = st.columns([3,1])
-            col1.write(f"**{eq}:** {count} bookings")
-            if col2.button(f"Details", key=f"{eq}_details"):
-                # Drill-down for this equipment
-                st.markdown(f"#### Details for {eq}")
-                detailed_rows = []
-                for bk in all_bookings:
-                    d = bk.to_dict()
-                    if d.get("equipment") == eq:
-                        detailed_rows.append([
-                            d.get("name", ""),
-                            d.get("date", ""),
-                            d.get("time", ""),
-                            d.get("slot", "—") if eq == "IncuCyte" else "—"
-                        ])
-                
-                if detailed_rows:
-                    df = pd.DataFrame(
-                        detailed_rows,
-                        columns=["User", "Date", "Time", "Slot"]
-                    )
-                    st.table(df)
+      # Equipment usage table with drill-down + cancel option
+st.markdown("### Equipment Usage")
+for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
+    col1, col2 = st.columns([3, 1])
+    col1.write(f"**{eq}:** {count} bookings")
+    if col2.button(f"Details", key=f"{eq}_details"):
+        st.markdown(f"#### Details for {eq}")
 
-                    # Export to CSV
-                    csv_buffer = io.StringIO()
-                    df.to_csv(csv_buffer, index=False)
-                    st.download_button(
-                        label="⬇️ Download CSV",
-                        data=csv_buffer.getvalue(),
-                        file_name=f"{eq}_bookings.csv",
-                        mime="text/csv"
-                    )
-                else:
-                    st.info(f"No bookings found for {eq}")
+        # Build table data
+        detailed_rows = []
+        for bk in all_bookings:
+            d = bk.to_dict()
+            if d.get("equipment") == eq:
+                detailed_rows.append({
+                    "id": bk.id,
+                    "name": d.get("name", ""),
+                    "date": d.get("date", ""),
+                    "time": d.get("time", ""),
+                    "slot": d.get("slot", "—") if eq == "IncuCyte" else "—"
+                })
+
+        if detailed_rows:
+            for row in detailed_rows:
+                c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 2, 1])
+                c1.write(row["name"])
+                c2.write(row["date"])
+                c3.write(row["time"])
+                c4.write(row["slot"])
+
+                # Cancel button
+                if c5.button("❌", key=f"cancel_{row['id']}"):
+                    try:
+                        db.collection("bookings").document(row["id"]).delete()
+                        st.success(f"Booking for {row['name']} on {row['date']} at {row['time']} cancelled.")
+                        st.experimental_rerun()
+                    except Exception as e:
+                        st.error(f"Error cancelling booking: {e}")
+        else:
+            st.info(f"No bookings found for {eq}")
 
         # Charts
         if equipment_usage:
