@@ -203,7 +203,7 @@ except Exception as e:
     st.error(f"Error loading bookings: {e}")
 
 # -----------------------------
-# 📅 Equipment-Specific Calendar (Interactive)
+# 📅 Advanced Calendar (color-coded + popups)
 # -----------------------------
 from streamlit_calendar import calendar
 
@@ -224,26 +224,50 @@ try:
         b = booking.to_dict()
         start = f"{b['date']}T{b['time']}:00"
 
-        # Include slot if it's IncuCyte
-        title = f"{b['equipment']} ({b['name']})"
-        if b['equipment'] == "IncuCyte" and b.get('slot'):
-            title += f" - {b['slot']}"
+        # Build event title and description
+        slot_text = f" – {b['slot']}" if b.get('slot') else ""
+        title = f"{b['equipment']}{slot_text}"
+        description = f"Booked by {b['name']} at {b['time']}"
+
+        # Color per equipment
+        color_map = {
+            "IncuCyte": "#1E90FF",
+            "Confocal Microscope": "#8A2BE2",
+            "Flow Cytometer": "#00B894",
+            "Centrifuge": "#E17055",
+            "Nanodrop": "#FDCB6E",
+            "Qubit 4": "#6C5CE7",
+            "QuantStudio 3": "#00CEC9",
+            "Genesis SC": "#FF7675",
+            "Biorad ChemiDoc": "#55EFC4",
+            "C1000 Touch": "#0984E3"
+        }
+        event_color = color_map.get(b["equipment"], "#1E90FF")
 
         events.append({
             "title": title,
             "start": start,
             "allDay": False,
-            "backgroundColor": "#1E90FF",
-            "borderColor": "#1E90FF"
+            "backgroundColor": event_color,
+            "borderColor": event_color,
+            "description": description  # for popup
         })
 
     if events:
-        calendar(events, options={
+        calendar_options = {
             "initialView": "dayGridMonth",
-            "height": "600px",
-            "editable": False,
-            "eventDisplay": "block"
-        })
+            "headerToolbar": {
+                "left": "prev,next today",
+                "center": "title",
+                "right": "dayGridMonth,timeGridWeek,timeGridDay"
+            },
+            "height": "650px",
+            "eventDisplay": "block",
+            "eventClick": {
+                "alert": True  # show booking details popup
+            }
+        }
+        calendar(events, options=calendar_options)
     else:
         st.info(f"No bookings for {equipment_for_calendar}.")
 
