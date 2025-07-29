@@ -265,167 +265,157 @@ import io
 st.markdown("---")
 st.subheader("📊 Analytics Dashboard")
 
-# Fetch all bookings
-all_bookings = []
 try:
+    # Fetch all bookings
     all_bookings = list(db.collection("bookings").stream())
-except Exception as e:
-    st.error(f"Error fetching bookings: {e}")
 
-if not all_bookings:
-    st.info("No bookings yet.")
-else:
-    # --- Global CSV export ---
-    all_rows = []
-    for bk in all_bookings:
-        d = bk.to_dict()
-        all_rows.append([
-            d.get("name", ""),
-            d.get("equipment", ""),
-            d.get("slot", "—"),
-            d.get("start_date", ""),
-            d.get("start_time", ""),
-            d.get("end_date", ""),
-            d.get("end_time", "")
-        ])
+    if not all_bookings:
+        st.info("No bookings yet.")
+    else:
+        # --- Global CSV export ---
+        all_rows = []
+        equipment_usage = {}
+        hourly_usage = {}
 
-    if all_rows:
-        all_df = pd.DataFrame(
-            all_rows,
-            columns=["User", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"]
-        )
-        csv_buffer = io.StringIO()
-        all_df.to_csv(csv_buffer, index=False)
-        st.download_button(
-            label="⬇️ Download **All Bookings (CSV)**",
-            data=csv_buffer.getvalue(),
-            file_name="all_bookings.csv",
-            mime="text/csv"
-        )
+        for bk in all_bookings:
+            d = bk.to_dict()
+            all_rows.append([
+                d.get("name", ""),
+                d.get("equipment", ""),
+                d.get("slot", "—"),
+                d.get("start_date", ""),
+                d.get("start_time", ""),
+                d.get("end_date", ""),
+                d.get("end_time", "")
+            ])
 
-    # --- Summary metrics ---
-    total_bookings = len(all_bookings)
-    equipment_usage = {}
-    hourly_usage = {}
+            eq = d.get("equipment", "Unknown")
+            equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
 
-    for bk in all_bookings:
-        d = bk.to_dict()
-        eq = d.get("equipment", "Unknown")
-        equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
+            if d.get("start_time"):
+                hour = d["start_time"].split(":")[0]
+                hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
 
-        # Derive start hour (if available)
-        if d.get("start_time"):
-            hour = d.get("start_time")[:2]
-            hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
-
-    st.metric("Total Bookings", total_bookings)
-
-    # --- Global charts ---
-    if equipment_usage:
-        st.markdown("### Most Used Equipment (chart)")
-        eq_df = pd.DataFrame(
-            [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
-        ).sort_values("Bookings", ascending=False)
-        st.bar_chart(eq_df.set_index("Equipment"))
-
-    if hourly_usage:
-        st.markdown("### Peak Booking Hours (chart)")
-        hr_df = pd.DataFrame(
-            [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
-        ).sort_values("Hour")
-        st.bar_chart(hr_df.set_index("Hour"))
-
-    # --- Drill-down with cancel controls + charts ---
-    st.markdown("### Equipment Usage Details")
-
-    # Remember which equipment's details are open
-    if "detail_eq" not in st.session_state:
-        st.session_state["detail_eq"] = None
-
-    for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
-        col1, col2 = st.columns([3, 1])
-        col1.write(f"**{eq}:** {count} bookings")
-        if col2.button("Details", key=f"{eq}_details"):
-            st.session_state["detail_eq"] = eq
-
-    detail_eq = st.session_state.get("detail_eq")
-
-    if detail_eq:
-        st.markdown(f"#### Details for {detail_eq}")
-
-        # Build data for selected equipment
-        detail_rows = []
-        for b in all_bookings:
-            d = b.to_dict()
-            if d.get("equipment") != detail_eq:
-                continue
-            if not d.get("start_date") or not d.get("end_date"):
-                continue
-            detail_rows.append({
-                "DocID": b.id,
-                "User": d.get("name", ""),
-                "Slot": d.get("slot", "—"),
-                "Start Date": d.get("start_date", ""),
-                "Start Time": d.get("start_time", ""),
-                "End Date": d.get("end_date", ""),
-                "End Time": d.get("end_time", "")
-            })
-
-        if not detail_rows:
-            st.info(f"No valid bookings for {detail_eq}.")
-        else:
-            ddf = pd.DataFrame(detail_rows)
-
-            # Table with cancel buttons
-            st.markdown("##### Bookings")
-            for _, row in ddf.iterrows():
-                c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
-                c1.write(row["User"])
-                c2.write(f"{row['Start Date']} {row['Start Time']}")
-                c3.write("→")
-                c4.write(f"{row['End Date']} {row['End Time']}")
-                c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
-
-                if c6.button("❌", key=f"cancel_{row['DocID']}"):
-                    db.collection("bookings").document(row["DocID"]).delete()
-                    st.success(f"Booking for {row['User']} cancelled.")
-                    st.experimental_rerun()
-
-            # Charts
-            st.markdown("##### Usage Trend (Bookings over time)")
-            trend_df = (
-                ddf.groupby("Start Date").size()
-                   .rename("Bookings").reset_index()
-                   .sort_values("Start Date")
+        # CSV export button
+        if all_rows:
+            csv_df = pd.DataFrame(
+                all_rows,
+                columns=["User", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"]
             )
-            if not trend_df.empty:
-                st.line_chart(trend_df.set_index("Start Date"))
-
-            st.markdown("##### Start Hour Distribution")
-            hour_series = ddf["Start Time"].str.extract(r"^(\d{1,2})")[0]
-            hour_counts = (
-                hour_series.value_counts()
-                           .rename_axis("Hour")
-                           .rename("Bookings")
-                           .sort_index()
+            csv_buffer = io.StringIO()
+            csv_df.to_csv(csv_buffer, index=False)
+            st.download_button(
+                label="⬇️ Download All Bookings (CSV)",
+                data=csv_buffer.getvalue(),
+                file_name="all_bookings.csv",
+                mime="text/csv"
             )
-            if not hour_counts.empty:
-                st.bar_chart(hour_counts)
 
-            if detail_eq == "IncuCyte":
-                st.markdown("##### IncuCyte Slot Usage")
-                slot_counts = (
-                    ddf["Slot"].replace("", "—")
-                               .value_counts()
-                               .rename_axis("Slot")
-                               .rename("Bookings")
+        # Summary metrics
+        st.metric("Total Bookings", len(all_bookings))
+
+        # Equipment usage chart
+        if equipment_usage:
+            st.markdown("### Most Used Equipment (Chart)")
+            eq_df = pd.DataFrame(
+                [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
+            ).sort_values("Bookings", ascending=False)
+            st.bar_chart(eq_df.set_index("Equipment"))
+
+        # Peak hours chart
+        if hourly_usage:
+            st.markdown("### Peak Booking Hours (Chart)")
+            hr_df = pd.DataFrame(
+                [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
+            ).sort_values("Hour")
+            st.bar_chart(hr_df.set_index("Hour"))
+
+        # --- Drill-down with cancel controls + charts ---
+        st.markdown("### Equipment Usage Details")
+
+        if "detail_eq" not in st.session_state:
+            st.session_state["detail_eq"] = None
+
+        for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
+            col1, col2 = st.columns([3, 1])
+            col1.write(f"**{eq}:** {count} bookings")
+            if col2.button("Details", key=f"{eq}_details"):
+                st.session_state["detail_eq"] = eq
+
+        detail_eq = st.session_state.get("detail_eq")
+
+        if detail_eq:
+            st.markdown(f"#### Details for {detail_eq}")
+
+            # Build details list
+            detail_rows = []
+            for b in all_bookings:
+                d = b.to_dict()
+                if d.get("equipment") != detail_eq:
+                    continue
+                detail_rows.append({
+                    "DocID": b.id,
+                    "User": d.get("name", ""),
+                    "Slot": d.get("slot", "—"),
+                    "Start Date": d.get("start_date", ""),
+                    "Start Time": d.get("start_time", ""),
+                    "End Date": d.get("end_date", ""),
+                    "End Time": d.get("end_time", "")
+                })
+
+            if not detail_rows:
+                st.info(f"No valid bookings for {detail_eq}.")
+            else:
+                ddf = pd.DataFrame(detail_rows)
+
+                st.markdown("##### Bookings")
+                for _, row in ddf.iterrows():
+                    c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
+                    c1.write(row["User"])
+                    c2.write(f"{row['Start Date']} {row['Start Time']}")
+                    c3.write("→")
+                    c4.write(f"{row['End Date']} {row['End Time']}")
+                    c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
+
+                    if c6.button("❌", key=f"cancel_{row['DocID']}"):
+                        db.collection("bookings").document(row["DocID"]).delete()
+                        st.success(f"Booking for {row['User']} cancelled.")
+                        st.experimental_rerun()
+
+                # Charts
+                st.markdown("##### Usage Trend (Bookings over time)")
+                trend_df = (
+                    ddf.groupby("Start Date").size()
+                       .rename("Bookings").reset_index()
+                       .sort_values("Start Date")
                 )
-                if not slot_counts.empty:
-                    st.bar_chart(slot_counts)
+                if not trend_df.empty:
+                    st.line_chart(trend_df.set_index("Start Date"))
+
+                st.markdown("##### Start Hour Distribution")
+                hour_series = ddf["Start Time"].str.extract(r"^(\d{1,2})")[0]
+                hour_counts = (
+                    hour_series.value_counts()
+                               .rename_axis("Hour")
+                               .rename("Bookings")
+                               .sort_index()
+                )
+                if not hour_counts.empty:
+                    st.bar_chart(hour_counts)
+
+                if detail_eq == "IncuCyte":
+                    st.markdown("##### IncuCyte Slot Usage")
+                    slot_counts = (
+                        ddf["Slot"].replace("", "—")
+                                   .value_counts()
+                                   .rename_axis("Slot")
+                                   .rename("Bookings")
+                    )
+                    if not slot_counts.empty:
+                        st.bar_chart(slot_counts)
 
 except Exception as e:
     st.error(f"Error loading analytics: {e}")
-
 
         # --- Drill-down with cancel controls + charts ---
     st.markdown("### Equipment Usage Details")
