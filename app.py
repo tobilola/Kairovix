@@ -79,6 +79,14 @@ if st.checkbox("📋 Show Recent Bookings"):
 st.markdown("---")
 st.subheader("📋 Upcoming Bookings")
 
+# Filter controls
+filter_equipment = st.selectbox("Filter by Equipment", ["All"] + [
+    "IncuCyte", "Confocal Microscope", "Flow Cytometer",
+    "Centrifuge", "Nanodrop", "Qubit 4", "QuantStudio 3",
+    "Genesis SC", "Biorad ChemiDoc", "C1000 Touch"
+])
+filter_date = st.date_input("Filter by Date (optional)", None)
+
 try:
     bookings_ref = db.collection("bookings").order_by(
         "timestamp", direction=firestore.Query.DESCENDING
@@ -88,11 +96,18 @@ try:
     data = []
     for booking in bookings:
         b = booking.to_dict()
+
+        # Apply filters
+        if filter_equipment != "All" and b["equipment"] != filter_equipment:
+            continue
+        if filter_date and b["date"] != filter_date.strftime("%Y-%m-%d"):
+            continue
+
         data.append([b["name"], b["equipment"], b["date"], b["time"]])
 
     if data:
         st.table(data)
     else:
-        st.info("No bookings yet. Submit a booking above.")
+        st.info("No bookings match your filters.")
 except Exception as e:
     st.error(f"Error loading bookings: {e}")
