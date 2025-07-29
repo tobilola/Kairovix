@@ -131,33 +131,43 @@ except Exception as e:
 # -----------------------------
 # 📅 Calendar View (before analytics)
 # -----------------------------
+from streamlit_calendar import calendar
+import json
+
 st.markdown("---")
-st.subheader("📅 Calendar View")
+st.subheader("📅 Calendar View (Interactive)")
 
 try:
-    # Order by date (stored as YYYY-MM-DD string)
-    cal_q = db.collection("bookings").order_by("date")
-    calendar = {}
-    for bk in cal_q.stream():
-        d = bk.to_dict()
-        day = d.get("date")
-        if not day:
-            continue
-        calendar.setdefault(day, []).append(d)
+    bookings_ref = db.collection("bookings").order_by("date").stream()
 
-    if calendar:
-        # Sort dates ascending
-        for day in sorted(calendar.keys()):
-            # Sort events by time within the day
-            events = sorted(calendar[day], key=lambda x: x.get("time",""))
-            with st.expander(f"📆 {day} — {len(events)} booking(s)", expanded=False):
-                for ev in events:
-                    st.write(
-                        f"• {ev.get('time','??:??')} — {ev.get('equipment','?')} "
-                        f"(**{ev.get('name','?')}**)"
-                    )
+    # Build events list for calendar
+    events = []
+    for booking in bookings_ref:
+        b = booking.to_dict()
+        event_date = b["date"]
+        time_str = b["time"]
+        title = f"{b['equipment']} ({b['name']})"
+        start = f"{event_date}T{time_str}:00"
+
+        events.append({
+            "title": title,
+            "start": start,
+            "allDay": False,
+            "backgroundColor": "#1E90FF",
+            "borderColor": "#1E90FF",
+        })
+
+    if events:
+        calendar_options = {
+            "initialView": "dayGridMonth",
+            "height": "600px",
+            "editable": False,
+            "eventDisplay": "block"
+        }
+        calendar(events, options=calendar_options)
     else:
         st.info("No bookings to show on the calendar.")
+
 except Exception as e:
     st.error(f"Error loading calendar: {e}")
 
