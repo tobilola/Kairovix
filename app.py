@@ -326,88 +326,73 @@ try:
             ).sort_values("Hour")
             st.bar_chart(hr_df.set_index("Hour"))
 
-      # --- Drill-down details, cancel controls, and per-equipment charts ---
-st.markdown("### Equipment Usage Details")
+        # --- Drill-down with cancel controls + charts ---
+    st.markdown("### Equipment Usage Details")
 
-# Remember which equipment's details are open
-if "detail_eq" not in st.session_state:
-    st.session_state["detail_eq"] = None
+    # Remember which equipment's details are open
+    if "detail_eq" not in st.session_state:
+        st.session_state["detail_eq"] = None
 
-# Selector rows
-for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
-    c1, c2 = st.columns([3, 1])
-    c1.write(f"**{eq}:** {count} bookings")
-    if c2.button("Details", key=f"{eq}_details"):
-        st.session_state["detail_eq"] = eq
+    for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
+        col1, col2 = st.columns([3, 1])
+        col1.write(f"**{eq}:** {count} bookings")
+        if col2.button("Details", key=f"{eq}_details"):
+            st.session_state["detail_eq"] = eq
 
-detail_eq = st.session_state.get("detail_eq")
+    detail_eq = st.session_state.get("detail_eq")
 
-if detail_eq:
-    st.markdown(f"#### Details for {detail_eq}")
+    if detail_eq:
+        st.markdown(f"#### Details for {detail_eq}")
 
-    # Build a dataframe of bookings for the selected equipment
-    detail_rows = []
-    for b in all_bookings:
-        d = b.to_dict()
-        if d.get("equipment") != detail_eq:
-            continue
-        # skip incomplete records
-        if not d.get("start_date") or not d.get("start_time"):
-            continue
-        detail_rows.append({
-            "DocID": b.id,
-            "User": d.get("name", ""),
-            "Equipment": d.get("equipment", ""),
-            "Slot": d.get("slot", "—"),
-            "Start Date": d.get("start_date", ""),
-            "Start Time": d.get("start_time", ""),
-            "End Date": d.get("end_date", ""),
-            "End Time": d.get("end_time", "")
-        })
+        # Build data for selected equipment
+        detail_rows = []
+        for b in all_bookings:
+            d = b.to_dict()
+            if d.get("equipment") != detail_eq:
+                continue
+            if not d.get("start_date") or not d.get("end_date"):
+                continue
+            detail_rows.append({
+                "DocID": b.id,
+                "User": d.get("name", ""),
+                "Slot": d.get("slot", "—"),
+                "Start Date": d.get("start_date", ""),
+                "Start Time": d.get("start_time", ""),
+                "End Date": d.get("end_date", ""),
+                "End Time": d.get("end_time", "")
+            })
 
-    if not detail_rows:
-        st.info(f"No valid bookings for {detail_eq}.")
-    else:
-        ddf = pd.DataFrame(detail_rows)
+        if not detail_rows:
+            st.info(f"No valid bookings for {detail_eq}.")
+        else:
+            ddf = pd.DataFrame(detail_rows)
 
-        # Table with cancel buttons per row
-        st.markdown("##### Bookings")
-        for _, row in ddf.iterrows():
-            c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 1.5, 2, 1.5, 0.7])
-            c1.write(f"{row['User']}")
-            c2.write(f"{row['Start Date']} {row['Start Time']}")
-            c3.write("→")
-            c4.write(f"{row['End Date']} {row['End Time']}")
-            c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
-            if c6.button("❌", key=f"cancel_{row['DocID']}"):
-                try:
+            # Table with cancel buttons
+            st.markdown("##### Bookings")
+            for _, row in ddf.iterrows():
+                c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
+                c1.write(row["User"])
+                c2.write(f"{row['Start Date']} {row['Start Time']}")
+                c3.write("→")
+                c4.write(f"{row['End Date']} {row['End Time']}")
+                c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
+
+                if c6.button("❌", key=f"cancel_{row['DocID']}"):
                     db.collection("bookings").document(row["DocID"]).delete()
-                    st.success(f"Cancelled booking for {row['User']}")
+                    st.success(f"Booking for {row['User']} cancelled.")
                     st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"Error cancelling booking: {e}")
 
-        # ---------- Charts ----------
-        st.markdown("##### Usage trend (bookings over time)")
-        try:
-            # Count by start date
+            # Charts
+            st.markdown("##### Usage Trend (Bookings over time)")
             trend_df = (
-                ddf.groupby("Start Date")
-                   .size()
-                   .rename("Bookings")
-                   .reset_index()
+                ddf.groupby("Start Date").size()
+                   .rename("Bookings").reset_index()
                    .sort_values("Start Date")
             )
             if not trend_df.empty:
                 st.line_chart(trend_df.set_index("Start Date"))
-            else:
-                st.info("No data for trend chart.")
-        except Exception as e:
-            st.warning(f"Trend chart unavailable: {e}")
 
-        st.markdown("##### Start hour distribution")
-        try:
-            # Extract hour from "HH:MM AM/PM" as 12-hr hour label
+            st.markdown("##### Start Hour Distribution")
             hour_series = ddf["Start Time"].str.extract(r"^(\d{1,2})")[0]
             hour_counts = (
                 hour_series.value_counts()
@@ -417,14 +402,9 @@ if detail_eq:
             )
             if not hour_counts.empty:
                 st.bar_chart(hour_counts)
-            else:
-                st.info("No data for hour distribution.")
-        except Exception as e:
-            st.warning(f"Hour chart unavailable: {e}")
 
-        if detail_eq == "IncuCyte":
-            st.markdown("##### IncuCyte slot usage")
-            try:
+            if detail_eq == "IncuCyte":
+                st.markdown("##### IncuCyte Slot Usage")
                 slot_counts = (
                     ddf["Slot"].replace("", "—")
                                .value_counts()
@@ -433,7 +413,6 @@ if detail_eq:
                 )
                 if not slot_counts.empty:
                     st.bar_chart(slot_counts)
-                else:
-                    st.info("No data for slot usage.")
-            except Exception as e:
-                st.warning(f"Slot chart unavailable: {e}")
+
+except Exception as e:
+    st.error(f"Error loading analytics: {e}")
