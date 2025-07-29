@@ -62,7 +62,6 @@ with st.form("booking_form"):
         except Exception:
             return None
 
-    # Show slot availability for IncuCyte
     if equipment == "IncuCyte":
         st.markdown("**IncuCyte Tray — availability for the selected date/time range**")
 
@@ -179,7 +178,44 @@ with st.form("booking_form"):
             )
 
 # -----------------------------
-# Calendar View (with date check)
+# Upcoming Bookings (TABLE)
+# -----------------------------
+st.markdown("---")
+st.subheader("📋 Upcoming Bookings")
+
+filter_equipment = st.selectbox("Filter by Equipment", ["All"] + EQUIPMENT_LIST)
+use_date_filter = st.checkbox("Filter by a specific date")
+filter_date = st.date_input("Choose date", value=date_cls.today()) if use_date_filter else None
+
+rows = []
+try:
+    bookings_ref = db.collection("bookings").order_by("timestamp", direction=firestore.Query.DESCENDING)
+    for bk in bookings_ref.stream():
+        d = bk.to_dict()
+        if filter_equipment != "All" and d.get("equipment") != filter_equipment:
+            continue
+        if filter_date and d.get("start_date") != filter_date.strftime("%Y-%m-%d"):
+            continue
+        rows.append([
+            d.get("name", ""),
+            d.get("equipment", ""),
+            d.get("slot", "") if d.get("equipment") == "IncuCyte" else "",
+            d.get("start_date", ""),
+            d.get("start_time", ""),
+            d.get("end_date", ""),
+            d.get("end_time", "")
+        ])
+except Exception as e:
+    st.error(f"Error loading bookings: {e}")
+
+if rows:
+    df = pd.DataFrame(rows, columns=["Name", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"])
+    st.table(df)
+else:
+    st.info("No bookings match your filters.")
+
+# -----------------------------
+# Calendar View
 # -----------------------------
 from streamlit_calendar import calendar
 st.markdown("---")
@@ -222,33 +258,69 @@ except Exception as e:
     st.error(f"Error loading calendar: {e}")
 
 # -----------------------------
-# Analytics Section (skip bad records)
+# Analytics + CSV + Cancel
 # -----------------------------
 st.markdown("---")
 st.subheader("📊 Analytics Dashboard")
 
 try:
     all_bookings = list(db.collection("bookings").stream())
-    total_bookings = 0
-    equipment_usage = {}
 
-    for b in all_bookings:
-        d = b.to_dict()
+    if not all_bookings:
+        st.info("No bookings yet.")
+    else:
+        # CSV Export
+        all_rows = []
+        for b in all_bookings:
+            d = b.to_dict()
+            all_rows.append([
+                d.get("name", ""),
+                d.get("equipment", ""),
+                d.get("slot", "—"),
+                d.get("start_date", ""),
+                d.get("start_time", ""),
+                d.get("end_date", ""),
+                d.get("end_time", "")
+            ])
+        if all_rows:
+            csv_df = pd.DataFrame(all_rows, columns=[
+                "User", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"
+            ])
+            csv_buffer = io.StringIO()
+            csv_df.to_csv(csv_buffer, index=False)
+            st.download_button(
+                label="⬇️ Download All Bookings (CSV)",
+                data=csv_buffer.getvalue(),
+                file_name="all_bookings.csv",
+                mime="text/csv"
+            )
 
-        if not d.get("start_date") or not d.get("end_date"):
-            continue
-        try:
-            datetime.strptime(d["start_date"], "%Y-%m-%d")
-            datetime.strptime(d["end_date"], "%Y-%m-%d")
-        except Exception:
-            continue
+        # Summary + Cancel
+        equipment_usage = {}
+        for b in all_bookings:
+            eq = b.to_dict().get("equipment", "Unknown")
+            equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
 
-        eq = d.get("equipment", "Unknown")
-        equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
-        total_bookings += 1
+        st.metric("Total Bookings", len(all_bookings))
 
-    st.metric("Total Bookings", total_bookings)
-    st.bar_chart(pd.DataFrame(equipment_usage.values(), index=equipment_usage.keys(), columns=["Bookings"]))
+        for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
+            c1, c2 = st.columns([3, 1])
+            c1.write(f"**{eq}:** {count} bookings")
+            if c2.button("Details", key=f"{eq}_details"):
+                st.markdown(f"#### Details for {eq}")
+
+                for b in all_bookings:
+                    d = b.to_dict()
+                    if d.get("equipment") == eq:
+                        cols = st.columns([2, 2, 2, 2, 1])
+                        cols[0].write(d.get("name", ""))
+                        cols[1].write(d.get("start_date", ""))
+                        cols[2].write(d.get("start_time", ""))
+                        cols[3].write(d.get("slot", "—"))
+                        if cols[4].button("❌", key=f"cancel_{b.id}"):
+                            db.collection("bookings").document(b.id).delete()
+                            st.success(f"Cancelled booking for {d.get('name')}")
+                            st.experimental_rerun()
+
 except Exception as e:
     st.error(f"Error loading analytics: {e}")
-
