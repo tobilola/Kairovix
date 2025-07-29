@@ -49,7 +49,7 @@ INCUCYTE_SLOTS = [
 ]
 
 # -----------------------------
-# Booking form (Grid slot selection works with st.radio)
+# Booking form (Grid slot selection with booked/available info)
 # -----------------------------
 INCUCYTE_SLOTS = [
     ["Top Left", "Top Right"],
@@ -64,38 +64,59 @@ with st.form("booking_form"):
     booking_time = st.time_input("Select Time Slot (24h format)")
 
     slot = None
+    booked_slots = set()
+
     if equipment == "IncuCyte":
         st.markdown("**Select Tray Slot (Click to select)**")
 
-        # Flatten the grid into one list but keep visual grouping
-        slot_choice = st.radio(
-            "Choose a slot", 
-            options=[slot for row in INCUCYTE_SLOTS for slot in row],
-            index=None,
-            horizontal=False
+        # Find already booked slots for this date/time
+        try:
+            booked_q = db.collection("bookings") \
+                .where("equipment", "==", "IncuCyte") \
+                .where("date", "==", booking_date.strftime("%Y-%m-%d")) \
+                .where("time", "==", booking_time.strftime("%H:%M")) \
+                .stream()
+
+            for b in booked_q:
+                s = b.to_dict().get("slot")
+                if s:
+                    booked_slots.add(s)
+        except Exception as e:
+            st.warning(f"Could not load booked slots: {e}")
+
+        # Show grid with availability
+        for row in INCUCYTE_SLOTS:
+            cols = st.columns(2)
+            for idx, s in enumerate(row):
+                tag = "🔒 Booked" if s in booked_slots else "🟢 Available"
+                cols[idx].markdown(f"**{s}** — {tag}")
+
+        # Allow only available slots to be selected
+        available_slots = [s for row in INCUCYTE_SLOTS for s in row if s not in booked_slots]
+        slot = st.radio(
+            "Choose an available slot",
+            options=available_slots if available_slots else ["No slots available"],
+            index=None
         )
-        slot = slot_choice
 
     submitted = st.form_submit_button("✅ Submit Booking")
 
     if submitted:
         if not name:
             st.warning("Please enter your name before submitting.")
-        elif equipment == "IncuCyte" and not slot:
-            st.warning("Please select a tray slot for IncuCyte.")
+        elif equipment == "IncuCyte" and (not slot or slot == "No slots available"):
+            st.warning("Please select an available tray slot for IncuCyte.")
         else:
-            # Prevent double booking (also check slot if IncuCyte)
-            query = db.collection("bookings") \
+            # Double booking check (extra safe)
+            q = db.collection("bookings") \
                 .where("equipment", "==", equipment) \
                 .where("date", "==", booking_date.strftime("%Y-%m-%d")) \
                 .where("time", "==", booking_time.strftime("%H:%M"))
 
             if equipment == "IncuCyte":
-                query = query.where("slot", "==", slot)
+                q = q.where("slot", "==", slot)
 
-            existing = list(query.stream())
-
-            if existing:
+            if list(q.stream()):
                 st.error(
                     f"❌ {equipment} {f'({slot}) ' if slot else ''}"
                     f"is already booked for {booking_time.strftime('%H:%M')} "
