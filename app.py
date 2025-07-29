@@ -28,34 +28,73 @@ EQUIPMENT_LIST = [
     "Genesis SC", "Biorad ChemiDoc", "C1000 Touch"
 ]
 
+# Optional color map for calendar
+COLOR_MAP = {
+    "IncuCyte": "#1E90FF",
+    "Confocal Microscope": "#8A2BE2",
+    "Flow Cytometer": "#00B894",
+    "Centrifuge": "#E17055",
+    "Nanodrop": "#FDCB6E",
+    "Qubit 4": "#6C5CE7",
+    "QuantStudio 3": "#00CEC9",
+    "Genesis SC": "#FF7675",
+    "Biorad ChemiDoc": "#55EFC4",
+    "C1000 Touch": "#0984E3",
+}
+
+INCUCYTE_SLOTS = [
+    "Top Left", "Top Right",
+    "Middle Left", "Middle Right",
+    "Bottom Left", "Bottom Right",
+]
+
 # -----------------------------
-# Booking form
+# Booking form (with IncuCyte slot layout)
 # -----------------------------
 with st.form("booking_form"):
     name = st.text_input("Your Name")
     equipment = st.selectbox("Select Equipment", EQUIPMENT_LIST)
     booking_date = st.date_input("Select Date", value=date_cls.today())
     booking_time = st.time_input("Select Time Slot (24h format)")
+
+    # Slot selection only for IncuCyte
+    slot = None
+    if equipment == "IncuCyte":
+        st.caption("IncuCyte tray slots:")
+        # Simple dropdown; we can replace with a clickable grid later
+        slot = st.selectbox("Select Tray Slot", INCUCYTE_SLOTS)
+
     submitted = st.form_submit_button("✅ Submit Booking")
 
     if submitted:
         # Basic validation
         if not name:
             st.warning("Please enter your name before submitting.")
+        elif equipment == "IncuCyte" and not slot:
+            st.warning("Please choose a tray slot for IncuCyte.")
         else:
-            # Prevent double booking: same equipment + same date + same time
-            existing = db.collection("bookings") \
+            # Prevent double booking:
+            # same equipment + same date + same time (+ same slot for IncuCyte)
+            existing_query = db.collection("bookings") \
                 .where("equipment", "==", equipment) \
                 .where("date", "==", booking_date.strftime("%Y-%m-%d")) \
-                .where("time", "==", booking_time.strftime("%H:%M")) \
-                .stream()
+                .where("time", "==", booking_time.strftime("%H:%M"))
 
-            if any(existing):
-                st.error(
-                    f"❌ {equipment} is already booked for "
-                    f"{booking_time.strftime('%H:%M')} on {booking_date.strftime('%Y-%m-%d')}."
-                    " Please choose a different slot."
-                )
+            if equipment == "IncuCyte":
+                existing_query = existing_query.where("slot", "==", slot)
+
+            existing = list(existing_query.stream())
+            if existing:
+                if equipment == "IncuCyte":
+                    st.error(
+                        f"❌ {equipment} **{slot}** is already booked for "
+                        f"{booking_time.strftime('%H:%M')} on {booking_date.strftime('%Y-%m-%d')}."
+                    )
+                else:
+                    st.error(
+                        f"❌ {equipment} is already booked for "
+                        f"{booking_time.strftime('%H:%M')} on {booking_date.strftime('%Y-%m-%d')}."
+                    )
             else:
                 doc_id = str(uuid.uuid4())
                 booking_data = {
@@ -63,13 +102,16 @@ with st.form("booking_form"):
                     "equipment": equipment,
                     "date": booking_date.strftime("%Y-%m-%d"),
                     "time": booking_time.strftime("%H:%M"),
-                    "timestamp": datetime.utcnow()
+                    "timestamp": datetime.utcnow(),
+                    "slot": slot if equipment == "IncuCyte" else None
                 }
                 db.collection("bookings").document(doc_id).set(booking_data)
-                st.success(
-                    f"✅ Booking confirmed for **{equipment}** at "
+                success_msg = (
+                    f"✅ Booking confirmed for **{equipment}**"
+                    f"{f' – **{slot}**' if slot else ''} at "
                     f"**{booking_time.strftime('%H:%M')}** on **{booking_date.strftime('%Y-%m-%d')}**."
                 )
+                st.success(success_msg)
 
 # -----------------------------
 # Recent bookings (optional)
@@ -85,8 +127,9 @@ if st.checkbox("📋 Show Recent Bookings"):
         for bk in recent:
             found_any = True
             d = bk.to_dict()
+            inc_slot = f" – **{d.get('slot')}**" if d.get("slot") else ""
             st.markdown(
-                f"🔹 **{d.get('equipment','?')}** booked by **{d.get('name','?')}** "
+                f"🔹 **{d.get('equipment','?')}**{inc_slot} booked by **{d.get('name','?')}** "
                 f"on **{d.get('date','?')} at {d.get('time','?')}**"
             )
         if not found_any:
@@ -102,7 +145,6 @@ st.subheader("📋 Upcoming Bookings")
 
 filter_equipment = st.selectbox("Filter by Equipment", ["All"] + EQUIPMENT_LIST)
 
-# Streamlit's date_input must have a default; add a toggle to make date optional
 use_date_filter = st.checkbox("Filter by a specific date")
 if use_date_filter:
     filter_date = st.date_input("Choose date", value=date_cls.today())
@@ -119,42 +161,59 @@ try:
             continue
         if filter_date and d.get("date") != filter_date.strftime("%Y-%m-%d"):
             continue
-        rows.append([d.get("name",""), d.get("equipment",""), d.get("date",""), d.get("time","")])
+        rows.append([
+            d.get("name",""),
+            d.get("equipment",""),
+            d.get("slot","") if d.get("equipment") == "IncuCyte" else "",
+            d.get("date",""),
+            d.get("time","")
+        ])
 
     if rows:
-        st.table(rows)
+        df = pd.DataFrame(rows, columns=["Name", "Equipment", "Slot", "Date", "Time"])
+        st.table(df)
     else:
         st.info("No bookings match your filters.")
 except Exception as e:
     st.error(f"Error loading bookings: {e}")
 
 # -----------------------------
-# 📅 Calendar View (before analytics)
+# 📅 Equipment-Specific Calendar (Interactive)
 # -----------------------------
 from streamlit_calendar import calendar
-import json
 
 st.markdown("---")
-st.subheader("📅 Calendar View (Interactive)")
+st.subheader("📅 Equipment-Specific Calendar")
+
+# Default calendar to IncuCyte (as requested)
+default_index = EQUIPMENT_LIST.index("IncuCyte")
+equipment_for_calendar = st.selectbox("Select Equipment to View", EQUIPMENT_LIST, index=default_index)
 
 try:
-    bookings_ref = db.collection("bookings").order_by("date").stream()
+    # Only load events for the selected equipment
+    bookings_ref = db.collection("bookings") \
+        .where("equipment", "==", equipment_for_calendar) \
+        .order_by("date")
 
-    # Build events list for calendar
     events = []
-    for booking in bookings_ref:
+    for booking in bookings_ref.stream():
         b = booking.to_dict()
-        event_date = b["date"]
-        time_str = b["time"]
-        title = f"{b['equipment']} ({b['name']})"
+        event_date = b.get("date")
+        time_str = b.get("time", "00:00")
+        # Title includes slot for IncuCyte
+        title = f"{b.get('equipment','?')} ({b.get('name','?')})"
+        if b.get("equipment") == "IncuCyte" and b.get("slot"):
+            title += f" – {b.get('slot')}"
+
         start = f"{event_date}T{time_str}:00"
+        color = COLOR_MAP.get(b.get("equipment",""), "#1E90FF")
 
         events.append({
             "title": title,
             "start": start,
             "allDay": False,
-            "backgroundColor": "#1E90FF",
-            "borderColor": "#1E90FF",
+            "backgroundColor": color,
+            "borderColor": color,
         })
 
     if events:
@@ -166,8 +225,7 @@ try:
         }
         calendar(events, options=calendar_options)
     else:
-        st.info("No bookings to show on the calendar.")
-
+        st.info(f"No bookings for **{equipment_for_calendar}**.")
 except Exception as e:
     st.error(f"Error loading calendar: {e}")
 
