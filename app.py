@@ -49,94 +49,167 @@ INCUCYTE_SLOTS = [
 ]
 
 # -----------------------------
-# Booking form (Grid slot selection with booked/available info)
+# Booking form (12hr start/end, overlap check, IncuCyte slots with availability)
 # -----------------------------
 INCUCYTE_SLOTS = [
     ["Top Left", "Top Right"],
     ["Middle Left", "Middle Right"],
     ["Bottom Left", "Bottom Right"]
 ]
+INCUCYTE_SLOTS_FLAT = [s for row in INCUCYTE_SLOTS for s in row]
 
 with st.form("booking_form"):
     name = st.text_input("Your Name")
     equipment = st.selectbox("Select Equipment", EQUIPMENT_LIST)
     booking_date = st.date_input("Select Date", value=date_cls.today())
-    booking_time = st.time_input("Select Time Slot (24h format)")
 
+    # ---- Manual Start & End Times (12hr) ----
+    st.markdown("**Enter booking times (12hr format, e.g., 09:00 AM and 02:30 PM)**")
+    start_time_str = st.text_input("Start Time", placeholder="e.g. 09:00 AM")
+    end_time_str   = st.text_input("End Time",   placeholder="e.g. 02:30 PM")
+
+    # Defaults
     slot = None
     booked_slots = set()
+    available_slots = INCUCYTE_SLOTS_FLAT
 
-    if equipment == "IncuCyte":
-        st.markdown("**Select Tray Slot (Click to select)**")
-
-        # Find already booked slots for this date/time
+    # Helper: parse times safely
+    def _parse_time_12h(txt):
         try:
-            booked_q = db.collection("bookings") \
-                .where("equipment", "==", "IncuCyte") \
-                .where("date", "==", booking_date.strftime("%Y-%m-%d")) \
-                .where("time", "==", booking_time.strftime("%H:%M")) \
-                .stream()
+            return datetime.strptime(txt.strip(), "%I:%M %p")
+        except Exception:
+            return None
 
-            for b in booked_q:
-                s = b.to_dict().get("slot")
-                if s:
-                    booked_slots.add(s)
-        except Exception as e:
-            st.warning(f"Could not load booked slots: {e}")
+    # If IncuCyte, look up which slots are booked for the chosen date AND overlapping time range
+    if equipment == "IncuCyte":
+        st.markdown("**IncuCyte Tray — availability for the selected date & time range**")
 
-        # Show grid with availability
+        # Attempt to parse the typed times so we can compute availability
+        req_start = _parse_time_12h(start_time_str) if start_time_str else None
+        req_end   = _parse_time_12h(end_time_str) if end_time_str else None
+
+        if req_start and req_end and req_start < req_end:
+            # Pull all IncuCyte bookings for that date
+            try:
+                same_day_q = db.collection("bookings") \
+                    .where("equipment", "==", "IncuCyte") \
+                    .where("date", "==", booking_date.strftime("%Y-%m-%d")) \
+                    .stream()
+
+                # For each slot, see if any booking overlaps [req_start, req_end)
+                per_slot_bookings = {s: [] for s in INCUCYTE_SLOTS_FLAT}
+                for doc in same_day_q:
+                    d = doc.to_dict()
+                    s = d.get("slot")
+                    s_start = _parse_time_12h(d.get("start_time", ""))
+                    s_end   = _parse_time_12h(d.get("end_time", ""))
+
+                    if s and s_start and s_end:
+                        per_slot_bookings[s].append((s_start, s_end))
+
+                # overlap if NOT (req_end <= s_start or req_start >= s_end)
+                for s in INCUCYTE_SLOTS_FLAT:
+                    overlaps = any(not (req_end <= s_start or req_start >= s_end)
+                                   for (s_start, s_end) in per_slot_bookings.get(s, []))
+                    if overlaps:
+                        booked_slots.add(s)
+
+                available_slots = [s for s in INCUCYTE_SLOTS_FLAT if s not in booked_slots]
+
+            except Exception as e:
+                st.warning(f"Could not load IncuCyte slot availability: {e}")
+        else:
+            st.info("Enter valid Start and End times to see slot availability.")
+
+        # Visual grid with availability tags
         for row in INCUCYTE_SLOTS:
-            cols = st.columns(2)
+            c1, c2 = st.columns(2)
             for idx, s in enumerate(row):
                 tag = "🔒 Booked" if s in booked_slots else "🟢 Available"
-                cols[idx].markdown(f"**{s}** — {tag}")
+                text = f"**{s}** — {tag}"
+                (c1 if idx == 0 else c2).markdown(text)
 
-        # Allow only available slots to be selected
-        available_slots = [s for row in INCUCYTE_SLOTS for s in row if s not in booked_slots]
+        # Selection: only from available slots
         slot = st.radio(
             "Choose an available slot",
-            options=available_slots if available_slots else ["No slots available"],
-            index=None
+            options=(available_slots if available_slots else ["No slots available"]),
+            index=None,
+            key="incu_slot_choice"
         )
 
     submitted = st.form_submit_button("✅ Submit Booking")
 
     if submitted:
+        # ---- Validation ----
         if not name:
             st.warning("Please enter your name before submitting.")
-        elif equipment == "IncuCyte" and (not slot or slot == "No slots available"):
-            st.warning("Please select an available tray slot for IncuCyte.")
-        else:
-            # Double booking check (extra safe)
-            q = db.collection("bookings") \
-                .where("equipment", "==", equipment) \
-                .where("date", "==", booking_date.strftime("%Y-%m-%d")) \
-                .where("time", "==", booking_time.strftime("%H:%M"))
+            st.stop()
 
+        # Parse/validate 12hr times
+        s_time = _parse_time_12h(start_time_str)
+        e_time = _parse_time_12h(end_time_str)
+        if not s_time or not e_time:
+            st.error("Invalid time format. Use HH:MM AM/PM, e.g., 09:00 AM.")
+            st.stop()
+        if not (s_time < e_time):
+            st.error("End Time must be later than Start Time.")
+            st.stop()
+
+        if equipment == "IncuCyte":
+            if not slot or slot == "No slots available":
+                st.warning("Please select an available tray slot for IncuCyte.")
+                st.stop()
+
+        # ---- Overlap check on submit (server-side safety) ----
+        day_str = booking_date.strftime("%Y-%m-%d")
+        q = db.collection("bookings") \
+              .where("equipment", "==", equipment) \
+              .where("date", "==", day_str)
+
+        # If IncuCyte, only compare with same slot
+        if equipment == "IncuCyte":
+            q = q.where("slot", "==", slot)
+
+        conflicts = []
+        for existing in q.stream():
+            d = existing.to_dict()
+            ex_start = _parse_time_12h(d.get("start_time", ""))
+            ex_end   = _parse_time_12h(d.get("end_time", ""))
+            if not ex_start or not ex_end:
+                continue
+            # overlap if NOT (e_time <= ex_start or s_time >= ex_end)
+            if not (e_time <= ex_start or s_time >= ex_end):
+                conflicts.append(d)
+
+        if conflicts:
             if equipment == "IncuCyte":
-                q = q.where("slot", "==", slot)
-
-            if list(q.stream()):
                 st.error(
-                    f"❌ {equipment} {f'({slot}) ' if slot else ''}"
-                    f"is already booked for {booking_time.strftime('%H:%M')} "
-                    f"on {booking_date.strftime('%Y-%m-%d')}."
+                    f"❌ {equipment} **({slot})** is already booked overlapping "
+                    f"{s_time.strftime('%I:%M %p')}–{e_time.strftime('%I:%M %p')} on {day_str}."
                 )
             else:
-                booking_data = {
-                    "name": name.strip(),
-                    "equipment": equipment,
-                    "date": booking_date.strftime("%Y-%m-%d"),
-                    "time": booking_time.strftime("%H:%M"),
-                    "slot": slot if equipment == "IncuCyte" else None,
-                    "timestamp": datetime.utcnow()
-                }
-                db.collection("bookings").document(str(uuid.uuid4())).set(booking_data)
-                st.success(
-                    f"✅ Booking confirmed for **{equipment}** "
-                    f"{f'({slot}) ' if slot else ''}at "
-                    f"{booking_time.strftime('%H:%M')} on {booking_date.strftime('%Y-%m-%d')}."
+                st.error(
+                    f"❌ {equipment} is already booked overlapping "
+                    f"{s_time.strftime('%I:%M %p')}–{e_time.strftime('%I:%M %p')} on {day_str}."
                 )
+        else:
+            # ---- Save booking ----
+            booking_data = {
+                "name": name.strip(),
+                "equipment": equipment,
+                "date": day_str,
+                "start_time": s_time.strftime("%I:%M %p"),
+                "end_time":   e_time.strftime("%I:%M %p"),
+                "slot": slot if equipment == "IncuCyte" else None,
+                # human-readable timestamp of registration; you can also store firestore.SERVER_TIMESTAMP via Admin SDK
+                "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            db.collection("bookings").document(str(uuid.uuid4())).set(booking_data)
+            st.success(
+                f"✅ Booking confirmed for **{equipment}** "
+                f"{f'({slot}) ' if slot else ''}"
+                f"{booking_data['start_time']}–{booking_data['end_time']} on {day_str}."
+            )
 
 # -----------------------------
 # Recent bookings (optional)
