@@ -30,42 +30,55 @@ with st.form("booking_form"):
     booking_time = st.time_input("Select Time Slot (24h format)")
     submitted = st.form_submit_button("✅ Submit Booking")
 
-  if submitted:
-    # Check for existing booking with same equipment, date, and time
-    existing_bookings = db.collection("bookings") \
-        .where("equipment", "==", equipment) \
-        .where("date", "==", booking_date.strftime("%Y-%m-%d")) \
-        .where("time", "==", booking_time.strftime("%H:%M")) \
-        .stream()
+    # 👇 Indented correctly inside the form
+    if submitted:
+        # Check for existing booking with same equipment, date, and time
+        existing_bookings = db.collection("bookings") \
+            .where("equipment", "==", equipment) \
+            .where("date", "==", booking_date.strftime("%Y-%m-%d")) \
+            .where("time", "==", booking_time.strftime("%H:%M")) \
+            .stream()
 
-    if any(existing_bookings):
-        st.error(f"❌ {equipment} is already booked for {booking_time.strftime('%H:%M')} on {booking_date.strftime('%Y-%m-%d')}. Please choose a different slot.")
-    else:
-        doc_id = str(uuid.uuid4())
-        booking_data = {
-            "name": name,
-            "equipment": equipment,
-            "date": booking_date.strftime("%Y-%m-%d"),
-            "time": booking_time.strftime("%H:%M"),
-            "timestamp": datetime.utcnow()
-        }
-        db.collection("bookings").document(doc_id).set(booking_data)
-        st.success(f"✅ Booking confirmed for {equipment} at {booking_time.strftime('%H:%M')} on {booking_date.strftime('%Y-%m-%d')}.")
+        if any(existing_bookings):
+            st.error(
+                f"❌ {equipment} is already booked for "
+                f"{booking_time.strftime('%H:%M')} on {booking_date.strftime('%Y-%m-%d')}. "
+                "Please choose a different slot."
+            )
+        else:
+            doc_id = str(uuid.uuid4())
+            booking_data = {
+                "name": name,
+                "equipment": equipment,
+                "date": booking_date.strftime("%Y-%m-%d"),
+                "time": booking_time.strftime("%H:%M"),
+                "timestamp": datetime.utcnow()
+            }
+            db.collection("bookings").document(doc_id).set(booking_data)
+            st.success(
+                f"✅ Booking confirmed for {equipment} at "
+                f"{booking_time.strftime('%H:%M')} on {booking_date.strftime('%Y-%m-%d')}."
+            )
 
 # Optional: Add a section to view recent bookings
 st.markdown("---")
 if st.checkbox("📋 Show Recent Bookings"):
-    bookings_ref = db.collection("bookings").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10)
+    bookings_ref = db.collection("bookings").order_by(
+        "timestamp", direction=firestore.Query.DESCENDING
+    ).limit(10)
     bookings = bookings_ref.stream()
 
     for booking in bookings:
         data = booking.to_dict()
-        st.markdown(f"🔹 **{data['equipment']}** booked by **{data['name']}** on **{data['date']} at {data['time']}**")
+        st.markdown(
+            f"🔹 **{data['equipment']}** booked by **{data['name']}** "
+            f"on **{data['date']} at {data['time']}**"
+        )
 
+# Upcoming bookings table
 st.markdown("---")
 st.subheader("📋 Upcoming Bookings")
 
-# Fetch and display bookings from Firestore
 try:
     bookings_ref = db.collection("bookings").order_by(
         "timestamp", direction=firestore.Query.DESCENDING
