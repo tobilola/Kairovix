@@ -49,7 +49,7 @@ INCUCYTE_SLOTS = [
 ]
 
 # -----------------------------
-# Booking form (IncuCyte slots now grid-based)
+# Booking form (Grid slot selection works with st.radio)
 # -----------------------------
 INCUCYTE_SLOTS = [
     ["Top Left", "Top Right"],
@@ -65,25 +65,16 @@ with st.form("booking_form"):
 
     slot = None
     if equipment == "IncuCyte":
-        st.markdown("**Select Tray Slot (Click on a slot)**")
-        cols = st.columns(2)
-        selected_slot = st.session_state.get("selected_slot", None)
+        st.markdown("**Select Tray Slot (Click to select)**")
 
-        for row in INCUCYTE_SLOTS:
-            col1, col2 = st.columns(2)
-            for idx, slot_name in enumerate(row):
-                if (idx == 0):
-                    button = col1.button(slot_name)
-                else:
-                    button = col2.button(slot_name)
-                if button:
-                    st.session_state["selected_slot"] = slot_name
-
-        slot = st.session_state.get("selected_slot", None)
-        if slot:
-            st.success(f"✅ Selected slot: **{slot}**")
-        else:
-            st.info("No slot selected yet.")
+        # Flatten the grid into one list but keep visual grouping
+        slot_choice = st.radio(
+            "Choose a slot", 
+            options=[slot for row in INCUCYTE_SLOTS for slot in row],
+            index=None,
+            horizontal=False
+        )
+        slot = slot_choice
 
     submitted = st.form_submit_button("✅ Submit Booking")
 
@@ -93,7 +84,7 @@ with st.form("booking_form"):
         elif equipment == "IncuCyte" and not slot:
             st.warning("Please select a tray slot for IncuCyte.")
         else:
-            # Prevent double booking (same equipment, date, time, and slot)
+            # Prevent double booking (also check slot if IncuCyte)
             query = db.collection("bookings") \
                 .where("equipment", "==", equipment) \
                 .where("date", "==", booking_date.strftime("%Y-%m-%d")) \
@@ -125,9 +116,6 @@ with st.form("booking_form"):
                     f"{f'({slot}) ' if slot else ''}at "
                     f"{booking_time.strftime('%H:%M')} on {booking_date.strftime('%Y-%m-%d')}."
                 )
-                # Reset selection after successful booking
-                if equipment == "IncuCyte":
-                    st.session_state["selected_slot"] = None
 
 # -----------------------------
 # Recent bookings (optional)
