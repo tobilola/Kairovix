@@ -282,6 +282,35 @@ import io
 st.markdown("---")
 st.subheader("📊 Analytics Dashboard")
 
+# -----------------------------
+# Global CSV export for all bookings
+# -----------------------------
+if all_bookings:
+    all_rows = []
+    for bk in all_bookings:
+        d = bk.to_dict()
+        all_rows.append([
+            d.get("name", ""),
+            d.get("equipment", ""),
+            d.get("date", ""),
+            d.get("time", ""),
+            d.get("slot", "—")
+        ])
+
+    if all_rows:
+        all_df = pd.DataFrame(
+            all_rows,
+            columns=["User", "Equipment", "Date", "Time", "Slot"]
+        )
+        csv_buffer = io.StringIO()
+        all_df.to_csv(csv_buffer, index=False)
+        st.download_button(
+            label="⬇️ Download **All Bookings (CSV)**",
+            data=csv_buffer.getvalue(),
+            file_name="all_bookings.csv",
+            mime="text/csv"
+        )
+
 try:
     all_bookings = list(db.collection("bookings").stream())
 
