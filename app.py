@@ -258,7 +258,7 @@ except Exception as e:
     st.error(f"Error loading calendar: {e}")
 
 # -----------------------------
-# Analytics + CSV + Cancel
+# Analytics + CSV + Charts + Cancel
 # -----------------------------
 st.markdown("---")
 st.subheader("📊 Analytics Dashboard")
@@ -271,6 +271,9 @@ try:
     else:
         # CSV Export
         all_rows = []
+        equipment_usage = {}
+        hourly_usage = {}
+
         for b in all_bookings:
             d = b.to_dict()
             all_rows.append([
@@ -282,6 +285,15 @@ try:
                 d.get("end_date", ""),
                 d.get("end_time", "")
             ])
+
+            eq = d.get("equipment", "Unknown")
+            equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
+
+            # Calculate hourly usage (start time hour)
+            t = d.get("start_time", "00:00 AM").split(":")[0]
+            hourly_usage[t] = hourly_usage.get(t, 0) + 1
+
+        # Global CSV export button
         if all_rows:
             csv_df = pd.DataFrame(all_rows, columns=[
                 "User", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"
@@ -295,14 +307,27 @@ try:
                 mime="text/csv"
             )
 
-        # Summary + Cancel
-        equipment_usage = {}
-        for b in all_bookings:
-            eq = b.to_dict().get("equipment", "Unknown")
-            equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
-
+        # Summary metrics
         st.metric("Total Bookings", len(all_bookings))
 
+        # Equipment usage chart
+        if equipment_usage:
+            st.markdown("### Most Used Equipment (Chart)")
+            eq_df = pd.DataFrame(
+                [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
+            ).sort_values("Bookings", ascending=False)
+            st.bar_chart(eq_df.set_index("Equipment"))
+
+        # Peak hours chart
+        if hourly_usage:
+            st.markdown("### Peak Booking Hours (Chart)")
+            hr_df = pd.DataFrame(
+                [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
+            ).sort_values("Hour")
+            st.bar_chart(hr_df.set_index("Hour"))
+
+        # Drill-down details and cancel
+        st.markdown("### Equipment Usage Details")
         for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
             c1, c2 = st.columns([3, 1])
             c1.write(f"**{eq}:** {count} bookings")
