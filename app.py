@@ -12,17 +12,16 @@ import requests  # for REST login
 # Firebase init (robust)
 # -----------------------------
 if not firebase_admin._apps:
-    # Get the firebase section from secrets
     firebase_creds = dict(st.secrets["firebase"])
 
-    # Ensure private_key has real newlines (not "\n" literals)
-    pk = firebase_creds.get("private_key", "")
-    if "\\n" in pk:
-        firebase_creds["private_key"] = pk.replace("\\n", "\n")
+    # Fix for malformed private key (escaped \n instead of real newlines)
+    if "private_key" in firebase_creds:
+        firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
 
-    # Must be exactly "service_account"
+    # Ensure type is correct
     firebase_creds["type"] = "service_account"
 
+    # Initialize Admin SDK
     cred = credentials.Certificate(firebase_creds)
     firebase_admin.initialize_app(cred)
 
