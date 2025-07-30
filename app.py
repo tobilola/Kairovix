@@ -219,11 +219,14 @@ with st.form("booking_form"):
                 f"to {booking_data['end_date']} {booking_data['end_time']}."
             )
 
-           if st.session_state.user_email:
-                st.markdown(f"### Booking for {st.session_state.lab_name}")
-            # Show booking form here
-           else:
-                st.warning("You must log in with your lab email to book or cancel equipment.")
+       # -----------------------------
+# Restrict booking form
+# -----------------------------
+if st.session_state.user_email:
+    st.markdown(f"### Booking for {st.session_state.lab_name}")
+    # >>> put the entire booking form code here <<<
+else:
+    st.warning("You must log in with your lab email to book or cancel equipment.")
 
 # -----------------------------
 # Upcoming Bookings (TABLE)
