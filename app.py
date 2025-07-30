@@ -22,9 +22,7 @@ db = firestore.client()
 # Multi-Lab Authentication
 # -----------------------------
 ALLOWED_DOMAINS = {
-    "adelaogala.lab@gmail.com": "Adelaiye-Ogala Lab",  # add more lab emails or domains here
-    # Example:
-    # "someone@anotherlab.org": "Another Lab",
+    "adelaogala.lab@gmail.com": "Adelaiye-Ogala Lab",
 }
 ADMIN_EMAIL = "ogunbowaleadeola@gmail.com"  # can cancel/delete bookings and view Analytics
 
@@ -43,7 +41,6 @@ st.markdown("Book time slots for lab equipment in real-time. Powered by **TOBI H
 # Helpers
 # -----------------------------
 def safe_rerun():
-    """Try to rerun without throwing on different Streamlit versions."""
     try:
         st.rerun()
     except Exception:
@@ -52,9 +49,6 @@ def safe_rerun():
         except Exception:
             pass
 
-# -----------------------------
-# Firebase REST: Login + Password Reset
-# -----------------------------
 def firebase_login(email: str, password: str):
     """Sign in using Firebase Identity Toolkit REST API."""
     api_key = st.secrets["firebase"].get("apiKey")
@@ -82,7 +76,7 @@ def send_password_reset(email: str):
         return {"error": {"message": f"NETWORK_ERROR: {e}"}}
 
 # -----------------------------
-# Login UI  (with Forgot Password)
+# Login UI
 # -----------------------------
 if st.session_state.user_email:
     st.success(f"Logged in as {st.session_state.user_email} ({st.session_state.lab_name})")
@@ -101,7 +95,6 @@ else:
             if login_email and login_password:
                 result = firebase_login(login_email, login_password)
                 if "idToken" in result:
-                    # Authorized if lab email (can book) or admin (can cancel & analytics)
                     if login_email in ALLOWED_DOMAINS or login_email == ADMIN_EMAIL:
                         st.session_state.user_email = login_email
                         st.session_state.lab_name = ALLOWED_DOMAINS.get(login_email, "Admin")
@@ -131,17 +124,9 @@ EQUIPMENT_LIST = [
     "Centrifuge", "Nanodrop", "Qubit 4", "QuantStudio 3",
     "Genesis SC", "Biorad ChemiDoc", "C1000 Touch"
 ]
-
-INCUCYTE_SLOTS = [
-    ["Top Left", "Top Right"],
-    ["Middle Left", "Middle Right"],
-    ["Bottom Left", "Bottom Right"],
-]
+INCUCYTE_SLOTS = [["Top Left", "Top Right"], ["Middle Left", "Middle Right"], ["Bottom Left", "Bottom Right"]]
 INCUCYTE_SLOTS_FLAT = [s for row in INCUCYTE_SLOTS for s in row]
 
-# -----------------------------
-# Helper: Parse 12hr time
-# -----------------------------
 def _parse_datetime_12h(date_obj, time_txt):
     try:
         return datetime.strptime(
@@ -152,386 +137,277 @@ def _parse_datetime_12h(date_obj, time_txt):
         return None
 
 # -----------------------------
-# Booking Form (enabled only for logged-in users)
+# Collapsible Sections (Mobile-Friendly)
 # -----------------------------
 if st.session_state.user_email:
-    st.markdown(f"### Booking for {st.session_state.lab_name}")
 
-    with st.form("booking_form"):
-        name = st.text_input("Your Name")
-        equipment = st.selectbox("Select Equipment", EQUIPMENT_LIST)
+    # ------------------ Booking ------------------
+    with st.expander("📅 Book Equipment", expanded=True):
+        with st.form("booking_form"):
+            name = st.text_input("Your Name")
+            equipment = st.selectbox("Select Equipment", EQUIPMENT_LIST)
 
-        start_date = st.date_input("Start Date", value=date_cls.today())
-        start_time_str = st.text_input("Start Time (12hr)", placeholder="e.g. 09:00 AM")
-        end_date = st.date_input("End Date", value=date_cls.today())
-        end_time_str = st.text_input("End Time (12hr)", placeholder="e.g. 02:30 PM")
+            start_date = st.date_input("Start Date", value=date_cls.today())
+            start_time_str = st.text_input("Start Time (12hr)", placeholder="e.g. 09:00 AM")
+            end_date = st.date_input("End Date", value=date_cls.today())
+            end_time_str = st.text_input("End Time (12hr)", placeholder="e.g. 02:30 PM")
 
-        slot = None
-        booked_slots = set()
-        available_slots = INCUCYTE_SLOTS_FLAT
+            slot = None
+            booked_slots = set()
+            available_slots = INCUCYTE_SLOTS_FLAT
 
-        if equipment == "IncuCyte":
-            st.markdown("**IncuCyte Tray — availability for the selected date/time range**")
+            if equipment == "IncuCyte":
+                st.markdown("**IncuCyte Tray — availability for the selected date/time range**")
+                req_start = _parse_datetime_12h(start_date, start_time_str)
+                req_end = _parse_datetime_12h(end_date, end_time_str)
 
-            req_start = _parse_datetime_12h(start_date, start_time_str)
-            req_end = _parse_datetime_12h(end_date, end_time_str)
+                if req_start and req_end and req_start < req_end:
+                    same_eq_q = db.collection("bookings").where("equipment", "==", "IncuCyte").stream()
+                    per_slot_bookings = {s: [] for s in INCUCYTE_SLOTS_FLAT}
+                    for doc in same_eq_q:
+                        d = doc.to_dict()
+                        s = d.get("slot")
+                        try:
+                            b_start = _parse_datetime_12h(
+                                datetime.strptime(d.get("start_date"), "%Y-%m-%d"), d.get("start_time")
+                            )
+                            b_end = _parse_datetime_12h(
+                                datetime.strptime(d.get("end_date"), "%Y-%m-%d"), d.get("end_time")
+                            )
+                        except Exception:
+                            continue
+                        if s and b_start and b_end:
+                            per_slot_bookings[s].append((b_start, b_end))
 
-            if req_start and req_end and req_start < req_end:
-                same_eq_q = db.collection("bookings").where("equipment", "==", "IncuCyte").stream()
+                    for s in INCUCYTE_SLOTS_FLAT:
+                        overlaps = any(not (req_end <= b_start or req_start >= b_end)
+                                       for (b_start, b_end) in per_slot_bookings.get(s, []))
+                        if overlaps:
+                            booked_slots.add(s)
+                    available_slots = [s for s in INCUCYTE_SLOTS_FLAT if s not in booked_slots]
+                else:
+                    st.info("Enter valid start & end date/time to see slot availability.")
 
-                per_slot_bookings = {s: [] for s in INCUCYTE_SLOTS_FLAT}
-                for doc in same_eq_q:
-                    d = doc.to_dict()
-                    s = d.get("slot")
+                for row in INCUCYTE_SLOTS:
+                    c1, c2 = st.columns(2)
+                    for idx, s in enumerate(row):
+                        tag = "🔒 Booked" if s in booked_slots else "🟢 Available"
+                        (c1 if idx == 0 else c2).markdown(f"**{s}** — {tag}")
+
+                slot = st.radio(
+                    "Choose an available slot",
+                    options=(available_slots if available_slots else ["No slots available"]),
+                    index=None,
+                    key="incu_slot_choice"
+                )
+
+            submitted = st.form_submit_button("✅ Submit Booking")
+            if submitted:
+                s_dt = _parse_datetime_12h(start_date, start_time_str)
+                e_dt = _parse_datetime_12h(end_date, end_time_str)
+                if not name or not s_dt or not e_dt or s_dt >= e_dt:
+                    st.error("❌ Please fill all fields correctly.")
+                    st.stop()
+                if equipment == "IncuCyte" and (not slot or slot == "No slots available"):
+                    st.warning("Please select an available tray slot for IncuCyte.")
+                    st.stop()
+
+                q = db.collection("bookings").where("equipment", "==", equipment)
+                if equipment == "IncuCyte":
+                    q = q.where("slot", "==", slot)
+
+                conflicts = []
+                for existing in q.stream():
+                    d = existing.to_dict()
                     try:
-                        b_start = _parse_datetime_12h(
-                            datetime.strptime(d.get("start_date"), "%Y-%m-%d"),
-                            d.get("start_time")
+                        ex_start = _parse_datetime_12h(
+                            datetime.strptime(d.get("start_date"), "%Y-%m-%d"), d.get("start_time")
                         )
-                        b_end = _parse_datetime_12h(
-                            datetime.strptime(d.get("end_date"), "%Y-%m-%d"),
-                            d.get("end_time")
+                        ex_end = _parse_datetime_12h(
+                            datetime.strptime(d.get("end_date"), "%Y-%m-%d"), d.get("end_time")
                         )
                     except Exception:
                         continue
-                    if s and b_start and b_end:
-                        per_slot_bookings[s].append((b_start, b_end))
+                    if not (e_dt <= ex_start or s_dt >= ex_end):
+                        conflicts.append(d)
 
-                for s in INCUCYTE_SLOTS_FLAT:
-                    overlaps = any(not (req_end <= b_start or req_start >= b_end)
-                                   for (b_start, b_end) in per_slot_bookings.get(s, []))
-                    if overlaps:
-                        booked_slots.add(s)
+                if conflicts:
+                    st.error(f"❌ {equipment} {f'({slot}) ' if slot else ''} is already booked during that period.")
+                else:
+                    booking_data = {
+                        "name": name.strip(),
+                        "equipment": equipment,
+                        "start_date": s_dt.strftime("%Y-%m-%d"),
+                        "start_time": s_dt.strftime("%I:%M %p"),
+                        "end_date": e_dt.strftime("%Y-%m-%d"),
+                        "end_time": e_dt.strftime("%I:%M %p"),
+                        "slot": slot if equipment == "IncuCyte" else None,
+                        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    db.collection("bookings").document(str(uuid.uuid4())).set(booking_data)
+                    st.success(f"✅ Booking confirmed for **{equipment}**")
 
-                available_slots = [s for s in INCUCYTE_SLOTS_FLAT if s not in booked_slots]
-            else:
-                st.info("Enter valid start & end date/time to see slot availability.")
+    # ------------------ Upcoming Bookings ------------------
+    with st.expander("📋 Upcoming Bookings", expanded=False):
+        filter_equipment = st.selectbox("Filter by Equipment", ["All"] + EQUIPMENT_LIST)
+        use_date_filter = st.checkbox("Filter by a specific date")
+        filter_date = st.date_input("Choose date", value=date_cls.today()) if use_date_filter else None
 
-            for row in INCUCYTE_SLOTS:
-                c1, c2 = st.columns(2)
-                for idx, s in enumerate(row):
-                    tag = "🔒 Booked" if s in booked_slots else "🟢 Available"
-                    (c1 if idx == 0 else c2).markdown(f"**{s}** — {tag}")
+        rows = []
+        try:
+            bookings_ref = db.collection("bookings").order_by("timestamp", direction=firestore.Query.DESCENDING)
+            for bk in bookings_ref.stream():
+                d = bk.to_dict()
+                if filter_equipment != "All" and d.get("equipment") != filter_equipment:
+                    continue
+                if filter_date and d.get("start_date") != filter_date.strftime("%Y-%m-%d"):
+                    continue
+                rows.append([
+                    d.get("name", ""), d.get("equipment", ""),
+                    d.get("slot", "") if d.get("equipment") == "IncuCyte" else "",
+                    d.get("start_date", ""), d.get("start_time", ""),
+                    d.get("end_date", ""), d.get("end_time", "")
+                ])
+        except Exception as e:
+            st.error(f"Error loading bookings: {e}")
 
-            slot = st.radio(
-                "Choose an available slot",
-                options=(available_slots if available_slots else ["No slots available"]),
-                index=None,
-                key="incu_slot_choice"
-            )
+        if rows:
+            df = pd.DataFrame(rows, columns=["Name", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"])
+            st.table(df)
+        else:
+            st.info("No bookings match your filters.")
 
-        submitted = st.form_submit_button("✅ Submit Booking")
-
-        if submitted:
-            if not name:
-                st.warning("Please enter your name before submitting.")
-                st.stop()
-
-            s_dt = _parse_datetime_12h(start_date, start_time_str)
-            e_dt = _parse_datetime_12h(end_date, end_time_str)
-            if not s_dt or not e_dt:
-                st.error("Invalid date/time format. Use HH:MM AM/PM for time.")
-                st.stop()
-            if s_dt >= e_dt:
-                st.error("End date/time must be later than start date/time.")
-                st.stop()
-
-            if equipment == "IncuCyte" and (not slot or slot == "No slots available"):
-                st.warning("Please select an available tray slot for IncuCyte.")
-                st.stop()
-
-            # Double-booking check
-            q = db.collection("bookings").where("equipment", "==", equipment)
-            if equipment == "IncuCyte":
-                q = q.where("slot", "==", slot)
-
-            conflicts = []
-            for existing in q.stream():
-                d = existing.to_dict()
+    # ------------------ Calendar ------------------
+    with st.expander("📅 Equipment-Specific Calendar", expanded=False):
+        equipment_for_calendar = st.selectbox("Select Equipment to View", EQUIPMENT_LIST)
+        try:
+            bookings_ref = db.collection("bookings").where("equipment", "==", equipment_for_calendar)
+            events = []
+            for b in bookings_ref.stream():
+                d = b.to_dict()
+                if not d.get("start_date") or not d.get("end_date"):
+                    continue
                 try:
-                    ex_start = _parse_datetime_12h(
-                        datetime.strptime(d.get("start_date"), "%Y-%m-%d"),
-                        d.get("start_time")
-                    )
-                    ex_end = _parse_datetime_12h(
-                        datetime.strptime(d.get("end_date"), "%Y-%m-%d"),
-                        d.get("end_time")
-                    )
+                    start = datetime.strptime(d["start_date"], "%Y-%m-%d")
+                    end = datetime.strptime(d["end_date"], "%Y-%m-%d")
                 except Exception:
                     continue
+                title = f"{d['equipment']} ({d['name']})"
+                slot_text = f" – {d['slot']}" if d.get("slot") else ""
+                events.append({
+                    "title": title + slot_text,
+                    "start": start.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "end": end.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "allDay": False,
+                    "backgroundColor": "#1E90FF",
+                    "borderColor": "#1E90FF",
+                })
 
-                if not (e_dt <= ex_start or s_dt >= ex_end):
-                    conflicts.append(d)
-
-            if conflicts:
-                st.error(f"❌ {equipment} {f'({slot}) ' if slot else ''}is already booked during that period.")
+            if events:
+                calendar(events, options={"initialView": "dayGridMonth", "height": "600px"})
             else:
-                booking_data = {
-                    "name": name.strip(),
-                    "equipment": equipment,
-                    "start_date": s_dt.strftime("%Y-%m-%d"),
-                    "start_time": s_dt.strftime("%I:%M %p"),
-                    "end_date": e_dt.strftime("%Y-%m-%d"),
-                    "end_time": e_dt.strftime("%I:%M %p"),
-                    "slot": slot if equipment == "IncuCyte" else None,
-                    "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                }
-                db.collection("bookings").document(str(uuid.uuid4())).set(booking_data)
-                st.success(
-                    f"✅ Booking confirmed for **{equipment}** "
-                    f"{f'({slot}) ' if slot else ''}from "
-                    f"{booking_data['start_date']} {booking_data['start_time']} "
-                    f"to {booking_data['end_date']} {booking_data['end_time']}."
-                )
+                st.info("No bookings yet.")
+        except Exception as e:
+            st.error(f"Error loading calendar: {e}")
 
-else:
-    # Disabled form for public users
-    st.markdown("### Booking Form (Disabled)")
-    st.info("🔒 Log in above to book equipment.")
-    with st.form("disabled_form"):
-        st.text_input("Your Name", disabled=True)
-        st.selectbox("Select Equipment", EQUIPMENT_LIST, disabled=True)
-        st.date_input("Start Date", disabled=True)
-        st.text_input("Start Time (12hr)", disabled=True)
-        st.date_input("End Date", disabled=True)
-        st.text_input("End Time (12hr)", disabled=True)
-        st.radio("Choose an available slot", INCUCYTE_SLOTS_FLAT, disabled=True)
-        st.form_submit_button("Submit", disabled=True)
-
-# -----------------------------
-# 📋 Upcoming Bookings, Calendar (only for logged-in users)
-# -----------------------------
-if st.session_state.user_email:
-    # --- Upcoming Bookings ---
-    st.markdown("---")
-    st.subheader("📋 Upcoming Bookings")
-
-    filter_equipment = st.selectbox("Filter by Equipment", ["All"] + EQUIPMENT_LIST)
-    use_date_filter = st.checkbox("Filter by a specific date")
-    filter_date = st.date_input("Choose date", value=date_cls.today()) if use_date_filter else None
-
-    rows = []
-    try:
-        bookings_ref = db.collection("bookings").order_by("timestamp", direction=firestore.Query.DESCENDING)
-        for bk in bookings_ref.stream():
-            d = bk.to_dict()
-            if filter_equipment != "All" and d.get("equipment") != filter_equipment:
-                continue
-            if filter_date and d.get("start_date") != filter_date.strftime("%Y-%m-%d"):
-                continue
-            rows.append([
-                d.get("name", ""),
-                d.get("equipment", ""),
-                d.get("slot", "") if d.get("equipment") == "IncuCyte" else "",
-                d.get("start_date", ""),
-                d.get("start_time", ""),
-                d.get("end_date", ""),
-                d.get("end_time", "")
-            ])
-    except Exception as e:
-        st.error(f"Error loading bookings: {e}")
-
-    if rows:
-        df = pd.DataFrame(rows, columns=["Name", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"])
-        st.table(df)
-    else:
-        st.info("No bookings match your filters.")
-
-    # --- Calendar ---
-    st.markdown("---")
-    st.subheader("📅 Equipment-Specific Calendar")
-    equipment_for_calendar = st.selectbox("Select Equipment to View", EQUIPMENT_LIST)
-
-    try:
-        bookings_ref = db.collection("bookings").where("equipment", "==", equipment_for_calendar)
-
-        events = []
-        for b in bookings_ref.stream():
-            d = b.to_dict()
-
-            if not d.get("start_date") or not d.get("end_date"):
-                continue
+    # ------------------ Analytics ------------------
+    if st.session_state.user_email == ADMIN_EMAIL:
+        with st.expander("📊 Analytics Dashboard (Admin)", expanded=False):
             try:
-                # To include start/end times precisely, parse times and combine here.
-                start = datetime.strptime(d["start_date"], "%Y-%m-%d")
-                end = datetime.strptime(d["end_date"], "%Y-%m-%d")
-            except Exception:
-                continue
-
-            title = f"{d['equipment']} ({d['name']})"
-            slot_text = f" – {d['slot']}" if d.get("slot") else ""
-            events.append({
-                "title": title + slot_text,
-                "start": start.strftime("%Y-%m-%dT%H:%M:%S"),
-                "end": end.strftime("%Y-%m-%dT%H:%M:%S"),
-                "allDay": False,
-                "backgroundColor": "#1E90FF",
-                "borderColor": "#1E90FF",
-            })
-
-        if events:
-            calendar(events, options={"initialView": "dayGridMonth", "height": "600px"})
-        else:
-            st.info("No bookings yet.")
-    except Exception as e:
-        st.error(f"Error loading calendar: {e}")
-
-# -----------------------------
-# 📊 Analytics Dashboard (ADMIN ONLY)
-# -----------------------------
-if st.session_state.user_email == ADMIN_EMAIL:
-    st.markdown("---")
-    st.subheader("📊 Analytics Dashboard (Admin)")
-
-    try:
-        all_bookings = list(db.collection("bookings").stream())
-        if not all_bookings:
-            st.info("No bookings yet.")
-        else:
-            all_rows = []
-            equipment_usage = {}
-            hourly_usage = {}
-
-            for bk in all_bookings:
-                d = bk.to_dict()
-                all_rows.append([
-                    d.get("name", ""),
-                    d.get("equipment", ""),
-                    d.get("slot", "—"),
-                    d.get("start_date", ""),
-                    d.get("start_time", ""),
-                    d.get("end_date", ""),
-                    d.get("end_time", "")
-                ])
-
-                eq = d.get("equipment", "Unknown")
-                equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
-
-                if d.get("start_time"):
-                    hour = d["start_time"].split(":")[0]
-                    hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
-
-            if all_rows:
-                csv_df = pd.DataFrame(
-                    all_rows,
-                    columns=["User", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"]
-                )
-                csv_buffer = io.StringIO()
-                csv_df.to_csv(csv_buffer, index=False)
-                st.download_button(
-                    label="⬇️ Download All Bookings (CSV)",
-                    data=csv_buffer.getvalue(),
-                    file_name="all_bookings.csv",
-                    mime="text/csv"
-                )
-
-            st.metric("Total Bookings", len(all_bookings))
-
-            if equipment_usage:
-                st.markdown("### Most Used Equipment (Chart)")
-                eq_df = pd.DataFrame(
-                    [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
-                ).sort_values("Bookings", ascending=False)
-                st.bar_chart(eq_df.set_index("Equipment"))
-
-            if hourly_usage:
-                st.markdown("### Peak Booking Hours (Chart)")
-                hr_df = pd.DataFrame(
-                    [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
-                ).sort_values("Hour")
-                st.bar_chart(hr_df.set_index("Hour"))
-
-            # --- Drill-down details (with admin-only cancel) ---
-            st.markdown("### Equipment Usage Details")
-            if "detail_eq" not in st.session_state:
-                st.session_state["detail_eq"] = None
-
-            for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
-                col1, col2 = st.columns([3, 1])
-                col1.write(f"**{eq}:** {count} bookings")
-                if col2.button("Details", key=f"{eq}_details"):
-                    st.session_state["detail_eq"] = eq
-
-            detail_eq = st.session_state.get("detail_eq")
-            if detail_eq:
-                st.markdown(f"#### Details for {detail_eq}")
-
-                detail_rows = []
-                for b in all_bookings:
-                    d = b.to_dict()
-                    if d.get("equipment") != detail_eq:
-                        continue
-                    detail_rows.append({
-                        "DocID": b.id,
-                        "User": d.get("name", ""),
-                        "Slot": d.get("slot", "—"),
-                        "Start Date": d.get("start_date", ""),
-                        "Start Time": d.get("start_time", ""),
-                        "End Date": d.get("end_date", ""),
-                        "End Time": d.get("end_time", "")
-                    })
-
-                if not detail_rows:
-                    st.info(f"No valid bookings for {detail_eq}.")
+                all_bookings = list(db.collection("bookings").stream())
+                if not all_bookings:
+                    st.info("No bookings yet.")
                 else:
-                    ddf = pd.DataFrame(detail_rows)
+                    all_rows = []
+                    equipment_usage = {}
+                    hourly_usage = {}
+                    for bk in all_bookings:
+                        d = bk.to_dict()
+                        all_rows.append([
+                            d.get("name", ""), d.get("equipment", ""),
+                            d.get("slot", "—"), d.get("start_date", ""),
+                            d.get("start_time", ""), d.get("end_date", ""),
+                            d.get("end_time", "")
+                        ])
+                        eq = d.get("equipment", "Unknown")
+                        equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
+                        if d.get("start_time"):
+                            hour = d["start_time"].split(":")[0]
+                            hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
 
-                    st.markdown("##### Bookings")
-                    for _, row in ddf.iterrows():
-                        c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
-                        c1.write(row["User"])
-                        c2.write(f"{row['Start Date']} {row['Start Time']}")
-                        c3.write("→")
-                        c4.write(f"{row['End Date']} {row['End Time']}")
-                        c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
+                    if all_rows:
+                        csv_df = pd.DataFrame(all_rows, columns=[
+                            "User", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"
+                        ])
+                        csv_buffer = io.StringIO()
+                        csv_df.to_csv(csv_buffer, index=False)
+                        st.download_button("⬇️ Download All Bookings (CSV)", csv_buffer.getvalue(), "all_bookings.csv")
 
-                        # Admin-only cancel button
-                        if st.session_state.user_email == ADMIN_EMAIL:
-                            if c6.button("❌", key=f"cancel_{row['DocID']}"):
-                                db.collection("bookings").document(row["DocID"]).delete()
-                                st.success(f"Booking for {row['User']} cancelled.")
-                                safe_rerun()
+                    st.metric("Total Bookings", len(all_bookings))
+
+                    if equipment_usage:
+                        st.markdown("### Most Used Equipment (Chart)")
+                        eq_df = pd.DataFrame(
+                            [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
+                        ).sort_values("Bookings", ascending=False)
+                        st.bar_chart(eq_df.set_index("Equipment"))
+
+                    if hourly_usage:
+                        st.markdown("### Peak Booking Hours (Chart)")
+                        hr_df = pd.DataFrame(
+                            [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
+                        ).sort_values("Hour")
+                        st.bar_chart(hr_df.set_index("Hour"))
+
+                    # Details
+                    st.markdown("### Equipment Usage Details")
+                    if "detail_eq" not in st.session_state:
+                        st.session_state["detail_eq"] = None
+                    for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
+                        col1, col2 = st.columns([3, 1])
+                        col1.write(f"**{eq}:** {count} bookings")
+                        if col2.button("Details", key=f"{eq}_details"):
+                            st.session_state["detail_eq"] = eq
+
+                    detail_eq = st.session_state.get("detail_eq")
+                    if detail_eq:
+                        st.markdown(f"#### Details for {detail_eq}")
+                        detail_rows = []
+                        for b in all_bookings:
+                            d = b.to_dict()
+                            if d.get("equipment") != detail_eq:
+                                continue
+                            detail_rows.append({
+                                "DocID": b.id, "User": d.get("name", ""),
+                                "Slot": d.get("slot", "—"), "Start Date": d.get("start_date", ""),
+                                "Start Time": d.get("start_time", ""), "End Date": d.get("end_date", ""),
+                                "End Time": d.get("end_time", "")
+                            })
+
+                        if not detail_rows:
+                            st.info(f"No valid bookings for {detail_eq}.")
                         else:
-                            c6.write("🔒")  # lock icon for non-admins
+                            ddf = pd.DataFrame(detail_rows)
+                            st.markdown("##### Bookings")
+                            for _, row in ddf.iterrows():
+                                c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
+                                c1.write(row["User"])
+                                c2.write(f"{row['Start Date']} {row['Start Time']}")
+                                c3.write("→")
+                                c4.write(f"{row['End Date']} {row['End Time']}")
+                                c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
+                                if st.session_state.user_email == ADMIN_EMAIL:
+                                    if c6.button("❌", key=f"cancel_{row['DocID']}"):
+                                        db.collection("bookings").document(row["DocID"]).delete()
+                                        st.success(f"Booking for {row['User']} cancelled.")
+                                        safe_rerun()
+                                else:
+                                    c6.write("🔒")
+            except Exception as e:
+                st.error(f"Error loading analytics: {e}")
 
-                    st.markdown("##### Usage Trend (Bookings over time)")
-                    trend_df = (
-                        ddf.groupby("Start Date").size()
-                           .rename("Bookings").reset_index()
-                           .sort_values("Start Date")
-                    )
-                    if not trend_df.empty:
-                        st.line_chart(trend_df.set_index("Start Date"))
-
-                    st.markdown("##### Start Hour Distribution")
-                    hour_series = ddf["Start Time"].str.extract(r"^(\d{1,2})")[0]
-                    hour_counts = (
-                        hour_series.value_counts()
-                                   .rename_axis("Hour")
-                                   .rename("Bookings")
-                                   .sort_index()
-                    )
-                    if not hour_counts.empty:
-                        st.bar_chart(hour_counts)
-
-                    if detail_eq == "IncuCyte":
-                        st.markdown("##### IncuCyte Slot Usage")
-                        slot_counts = (
-                            ddf["Slot"].replace("", "—")
-                                       .value_counts()
-                                       .rename_axis("Slot")
-                                       .rename("Bookings")
-                        )
-                        if not slot_counts.empty:
-                            st.bar_chart(slot_counts)
-
-    except Exception as e:
-        st.error(f"Error loading analytics: {e}")
-
-elif st.session_state.user_email:
-    # logged-in but not admin
-    st.markdown("---")
-    st.info("🔒 Analytics are restricted to administrators.")
+    else:
+        st.info("🔒 Analytics is restricted to admin users.")
 
 else:
-    st.info("🔒 You must log in with your lab email to view bookings, calendar, and analytics.")
+    st.info("🔒 You must log in with your lab email to access bookings and analytics.")
