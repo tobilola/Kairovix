@@ -21,7 +21,7 @@ db = firestore.client()
 # Multi-Lab Authentication
 # -----------------------------
 ALLOWED_DOMAINS = {
-    "adelaiogala.lab@gmail.com": "Adelaiye-Ogala Lab",
+    "adelaogala.lab@gmail.com": "Adelaiye-Ogala Lab",
     # Add more lab emails or domains as needed
 }
 
