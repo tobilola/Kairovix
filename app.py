@@ -421,9 +421,9 @@ if st.session_state.user_email:
                         # Show cancel button only for admin
                     if st.session_state.user_email == "ogunbowaleadeola@gmail.com":
                         if c6.button("❌", key=f"cancel_{row['DocID']}"):
-                        db.collection("bookings").document(row["DocID"]).delete()
-                        st.success(f"Booking for {row['User']} cancelled.")
-                        st.experimental_rerun()
+                            db.collection("bookings").document(row["DocID"]).delete()
+                            st.success(f"Booking for {row['User']} cancelled.")
+                            st.experimental_rerun()
                     else:
                         c6.write("🔒")  # Show lock icon for non-admin users
 
