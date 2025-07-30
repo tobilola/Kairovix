@@ -6,6 +6,7 @@ import uuid
 import pandas as pd
 import io
 from streamlit_calendar import calendar
+import requests  # <-- for REST login
 
 # -----------------------------
 # Firebase init
@@ -21,9 +22,12 @@ db = firestore.client()
 # Multi-Lab Authentication
 # -----------------------------
 ALLOWED_DOMAINS = {
-    "adelaogala.lab@gmail.com": "Adelaiye-Ogala Lab",
-    # Add more lab emails or domains as needed
+    "adelaogala.lab@gmail.com": "Adelaiye-Ogala Lab",  # add more lab emails or domains here
+    # Example for more labs:
+    # "someone@anotherlab.org": "Another Lab",
 }
+
+ADMIN_EMAIL = "ogunbowaleadeola@gmail.com"  # can cancel/delete bookings
 
 if "user_email" not in st.session_state:
     st.session_state.user_email = None
@@ -35,6 +39,23 @@ if "user_email" not in st.session_state:
 st.set_page_config(page_title="Kairovix – Lab Scheduler", layout="centered")
 st.title("🔬 Kairovix: Smart Lab Equipment Scheduler")
 st.markdown("Book time slots for lab equipment in real-time. Powered by **TOBI HealthOps AI**.")
+
+# -----------------------------
+# Full Login via Firebase REST (Email + Password)
+# -----------------------------
+def firebase_login(email: str, password: str):
+    """Sign in using Firebase Identity Toolkit REST API."""
+    api_key = st.secrets["firebase"].get("apiKey")
+    if not api_key:
+        return {"error": {"message": "MISSING_API_KEY"}}
+
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
+    payload = {"email": email, "password": password, "returnSecureToken": True}
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+        return resp.json()
+    except Exception as e:
+        return {"error": {"message": f"NETWORK_ERROR: {e}"}}
 
 # -----------------------------
 # Login UI
@@ -50,16 +71,20 @@ else:
     login_email = st.text_input("Lab Email Address")
     login_password = st.text_input("Password (for email login)", type="password")
     if st.button("Sign In"):
-        try:
-            user = auth.get_user_by_email(login_email)
-            if login_email in ALLOWED_DOMAINS:
-                st.session_state.user_email = login_email
-                st.session_state.lab_name = ALLOWED_DOMAINS[login_email]
-                st.experimental_rerun()
+        if login_email and login_password:
+            result = firebase_login(login_email, login_password)
+            if "idToken" in result:
+                # Authorized if lab email (can book) or admin (can cancel)
+                if login_email in ALLOWED_DOMAINS or login_email == ADMIN_EMAIL:
+                    st.session_state.user_email = login_email
+                    st.session_state.lab_name = ALLOWED_DOMAINS.get(login_email, "Admin")
+                    st.experimental_rerun()
+                else:
+                    st.error("❌ Your email is not authorized for this system.")
             else:
-                st.error("❌ Your email is not authorized for this system.")
-        except Exception:
-            st.error("❌ Invalid login or user not found in Firebase.")
+                st.error(f"❌ Login failed: {result.get('error', {}).get('message', 'Unknown error')}")
+        else:
+            st.error("Please enter both email and password.")
 
 # -----------------------------
 # Equipment list and slots
@@ -89,9 +114,8 @@ def _parse_datetime_12h(date_obj, time_txt):
     except Exception:
         return None
 
-
 # -----------------------------
-# Booking Form
+# Booking Form (enabled only for logged-in users)
 # -----------------------------
 if st.session_state.user_email:
     st.markdown(f"### Booking for {st.session_state.lab_name}")
@@ -179,6 +203,7 @@ if st.session_state.user_email:
                 st.warning("Please select an available tray slot for IncuCyte.")
                 st.stop()
 
+            # Double-booking check
             q = db.collection("bookings").where("equipment", "==", equipment)
             if equipment == "IncuCyte":
                 q = q.where("slot", "==", slot)
@@ -223,6 +248,7 @@ if st.session_state.user_email:
                 )
 
 else:
+    # Disabled form for public users
     st.markdown("### Booking Form (Disabled)")
     st.info("🔒 Log in above to book equipment.")
     with st.form("disabled_form"):
@@ -289,6 +315,8 @@ if st.session_state.user_email:
             if not d.get("start_date") or not d.get("end_date"):
                 continue
             try:
+                # If you want to include start/end times in the calendar, you could
+                # parse d['start_time']/d['end_time'] here and combine.
                 start = datetime.strptime(d["start_date"], "%Y-%m-%d")
                 end = datetime.strptime(d["end_date"], "%Y-%m-%d")
             except Exception:
@@ -374,7 +402,7 @@ if st.session_state.user_email:
                 ).sort_values("Hour")
                 st.bar_chart(hr_df.set_index("Hour"))
 
-            # --- Drill-down details ---
+            # --- Drill-down details (with admin-only cancel) ---
             st.markdown("### Equipment Usage Details")
             if "detail_eq" not in st.session_state:
                 st.session_state["detail_eq"] = None
@@ -418,14 +446,14 @@ if st.session_state.user_email:
                         c4.write(f"{row['End Date']} {row['End Time']}")
                         c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
 
-                        # Show cancel button only for admin
-                    if st.session_state.user_email == "ogunbowaleadeola@gmail.com":
-                        if c6.button("❌", key=f"cancel_{row['DocID']}"):
-                            db.collection("bookings").document(row["DocID"]).delete()
-                            st.success(f"Booking for {row['User']} cancelled.")
-                            st.experimental_rerun()
-                    else:
-                        c6.write("🔒")  # Show lock icon for non-admin users
+                        # Admin-only cancel button
+                        if st.session_state.user_email == ADMIN_EMAIL:
+                            if c6.button("❌", key=f"cancel_{row['DocID']}"):
+                                db.collection("bookings").document(row["DocID"]).delete()
+                                st.success(f"Booking for {row['User']} cancelled.")
+                                st.experimental_rerun()
+                        else:
+                            c6.write("🔒")  # lock icon for non-admins
 
                     st.markdown("##### Usage Trend (Bookings over time)")
                     trend_df = (
