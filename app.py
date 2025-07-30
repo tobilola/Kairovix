@@ -28,9 +28,6 @@ if not firebase_admin._apps:
     except Exception as e:
         st.error(f"❌ Firebase initialization failed: {e}")
 
-# Firestore client
-db = firestore.client()
-
 # -----------------------------
 # Multi-Lab Authentication
 # -----------------------------
