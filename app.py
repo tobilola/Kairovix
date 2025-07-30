@@ -242,11 +242,10 @@ else:
        # -----------------------------
 # Restrict booking form
 # -----------------------------
-if st.session_state.user_email:
-    st.markdown(f"### Booking for {st.session_state.lab_name}")
-    # >>> put the entire booking form code here <<<
-else:
-    st.warning("You must log in with your lab email to book or cancel equipment.")
+    if st.session_state.user_email:
+    # 1. 📋 Upcoming Bookings
+    st.markdown("---")
+    st.subheader("📋 Upcoming Bookings")
 
 # -----------------------------
 # Upcoming Bookings (TABLE)
@@ -489,7 +488,8 @@ except Exception as e:
     st.error(f"Error loading analytics: {e}")
 
         # --- Drill-down with cancel controls + charts ---
-    st.markdown("### Equipment Usage Details")
+   st.markdown("---")
+    st.subheader("📊 Equipment Usage Details")
 
     # Remember which equipment's details are open
     if "detail_eq" not in st.session_state:
@@ -505,6 +505,8 @@ except Exception as e:
 
     if detail_eq:
         st.markdown(f"#### Details for {detail_eq}")
+        else:
+    st.info("🔒 You must log in with your lab email to view bookings, calendar, and analytics.")
 
         # Build data for selected equipment
         detail_rows = []
