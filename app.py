@@ -26,7 +26,7 @@ ALLOWED_DOMAINS = {
     # Example:
     # "someone@anotherlab.org": "Another Lab",
 }
-ADMIN_EMAIL = "ogunbowaleadeola@gmail.com"  # can cancel/delete bookings
+ADMIN_EMAIL = "ogunbowaleadeola@gmail.com"  # can cancel/delete bookings and view Analytics
 
 if "user_email" not in st.session_state:
     st.session_state.user_email = None
@@ -40,7 +40,20 @@ st.title("🔬 Kairovix: Smart Lab Equipment Scheduler")
 st.markdown("Book time slots for lab equipment in real-time. Powered by **TOBI HealthOps AI**.")
 
 # -----------------------------
-# Full Login via Firebase REST (Email + Password)
+# Helpers
+# -----------------------------
+def safe_rerun():
+    """Try to rerun without throwing on different Streamlit versions."""
+    try:
+        st.rerun()
+    except Exception:
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
+
+# -----------------------------
+# Firebase REST: Login + Password Reset
 # -----------------------------
 def firebase_login(email: str, password: str):
     """Sign in using Firebase Identity Toolkit REST API."""
@@ -55,34 +68,60 @@ def firebase_login(email: str, password: str):
     except Exception as e:
         return {"error": {"message": f"NETWORK_ERROR: {e}"}}
 
+def send_password_reset(email: str):
+    """Send Firebase password reset email via REST API."""
+    api_key = st.secrets["firebase"].get("apiKey")
+    if not api_key:
+        return {"error": {"message": "MISSING_API_KEY"}}
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={api_key}"
+    payload = {"requestType": "PASSWORD_RESET", "email": email}
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+        return resp.json()
+    except Exception as e:
+        return {"error": {"message": f"NETWORK_ERROR: {e}"}}
+
 # -----------------------------
-# Login UI
+# Login UI  (with Forgot Password)
 # -----------------------------
 if st.session_state.user_email:
     st.success(f"Logged in as {st.session_state.user_email} ({st.session_state.lab_name})")
     if st.button("Logout"):
         st.session_state.user_email = None
         st.session_state.lab_name = None
-        st.experimental_rerun()
+        safe_rerun()
 else:
     st.warning("You must log in with your lab email to book or cancel equipment.")
     login_email = st.text_input("Lab Email Address")
     login_password = st.text_input("Password (for email login)", type="password")
-    if st.button("Sign In"):
-        if login_email and login_password:
-            result = firebase_login(login_email, login_password)
-            if "idToken" in result:
-                # Authorized if lab email (can book) or admin (can cancel)
-                if login_email in ALLOWED_DOMAINS or login_email == ADMIN_EMAIL:
-                    st.session_state.user_email = login_email
-                    st.session_state.lab_name = ALLOWED_DOMAINS.get(login_email, "Admin")
-                    
+
+    colA, colB = st.columns([1, 1])
+    with colA:
+        if st.button("Sign In"):
+            if login_email and login_password:
+                result = firebase_login(login_email, login_password)
+                if "idToken" in result:
+                    # Authorized if lab email (can book) or admin (can cancel & analytics)
+                    if login_email in ALLOWED_DOMAINS or login_email == ADMIN_EMAIL:
+                        st.session_state.user_email = login_email
+                        st.session_state.lab_name = ALLOWED_DOMAINS.get(login_email, "Admin")
+                        safe_rerun()
+                    else:
+                        st.error("❌ Your email is not authorized for this system.")
                 else:
-                    st.error("❌ Your email is not authorized for this system.")
+                    st.error(f"❌ Login failed: {result.get('error', {}).get('message', 'Unknown error')}")
             else:
-                st.error(f"❌ Login failed: {result.get('error', {}).get('message', 'Unknown error')}")
-        else:
-            st.error("Please enter both email and password.")
+                st.error("Please enter both email and password.")
+    with colB:
+        if st.button("Forgot Password?"):
+            if login_email:
+                reset = send_password_reset(login_email)
+                if "error" in reset:
+                    st.error(f"❌ {reset['error']['message']}")
+                else:
+                    st.success(f"📧 Password reset email sent to **{login_email}**")
+            else:
+                st.warning("Enter your email above to reset password.")
 
 # -----------------------------
 # Equipment list and slots
@@ -260,7 +299,7 @@ else:
         st.form_submit_button("Submit", disabled=True)
 
 # -----------------------------
-# 📋 Upcoming Bookings, Calendar & Analytics (only for logged-in users)
+# 📋 Upcoming Bookings, Calendar (only for logged-in users)
 # -----------------------------
 if st.session_state.user_email:
     # --- Upcoming Bookings ---
@@ -337,9 +376,12 @@ if st.session_state.user_email:
     except Exception as e:
         st.error(f"Error loading calendar: {e}")
 
-    # --- Analytics Dashboard ---
+# -----------------------------
+# 📊 Analytics Dashboard (ADMIN ONLY)
+# -----------------------------
+if st.session_state.user_email == ADMIN_EMAIL:
     st.markdown("---")
-    st.subheader("📊 Analytics Dashboard")
+    st.subheader("📊 Analytics Dashboard (Admin)")
 
     try:
         all_bookings = list(db.collection("bookings").stream())
@@ -448,7 +490,7 @@ if st.session_state.user_email:
                             if c6.button("❌", key=f"cancel_{row['DocID']}"):
                                 db.collection("bookings").document(row["DocID"]).delete()
                                 st.success(f"Booking for {row['User']} cancelled.")
-                                st.experimental_rerun()
+                                safe_rerun()
                         else:
                             c6.write("🔒")  # lock icon for non-admins
 
@@ -485,6 +527,11 @@ if st.session_state.user_email:
 
     except Exception as e:
         st.error(f"Error loading analytics: {e}")
+
+elif st.session_state.user_email:
+    # logged-in but not admin
+    st.markdown("---")
+    st.info("🔒 Analytics are restricted to administrators.")
 
 else:
     st.info("🔒 You must log in with your lab email to view bookings, calendar, and analytics.")
