@@ -25,15 +25,15 @@ ALLOWED_DOMAINS = {
     # Add more lab emails or domains as needed
 }
 
-if "user_email" not in st.session_state:
-    st.session_state.user_email = None
-    st.session_state.lab_name = None
-
-# Admin users (can see all labs)
+# 🆕 Admins: Can see all labs
 ADMIN_EMAILS = [
     "youremail@example.com",  # Replace with your email
     "anotheradmin@example.com"
 ]
+
+if "user_email" not in st.session_state:
+    st.session_state.user_email = None
+    st.session_state.lab_name = None
 
 # -----------------------------
 # Page setup
@@ -57,6 +57,7 @@ else:
     login_password = st.text_input("Password (for email login)", type="password")
     if st.button("Sign In"):
         try:
+            # Validate user email
             user = auth.get_user_by_email(login_email)
             if login_email in ALLOWED_DOMAINS:
                 st.session_state.user_email = login_email
@@ -83,6 +84,9 @@ INCUCYTE_SLOTS = [
 ]
 INCUCYTE_SLOTS_FLAT = [s for row in INCUCYTE_SLOTS for s in row]
 
+# -----------------------------
+# Helper to parse 12-hour time
+# -----------------------------
 def _parse_datetime_12h(date_obj, time_txt):
     try:
         return datetime.strptime(
@@ -215,7 +219,8 @@ if st.session_state.user_email:
                     "end_date": e_dt.strftime("%Y-%m-%d"),
                     "end_time": e_dt.strftime("%I:%M %p"),
                     "slot": slot if equipment == "IncuCyte" else None,
-                    "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                    "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    "lab_name": st.session_state.lab_name  # 🆕 Add lab name for filtering
                 }
                 db.collection("bookings").document(str(uuid.uuid4())).set(booking_data)
                 st.success(
@@ -226,27 +231,14 @@ if st.session_state.user_email:
                 )
 
 else:
-    st.markdown("### Booking Form (Disabled)")
-    st.info("🔒 Log in above to book equipment.")
-    with st.form("disabled_form"):
-        st.text_input("Your Name", disabled=True)
-        st.selectbox("Select Equipment", EQUIPMENT_LIST, disabled=True)
-        st.date_input("Start Date", disabled=True)
-        st.text_input("Start Time (12hr)", disabled=True)
-        st.date_input("End Date", disabled=True)
-        st.text_input("End Time (12hr)", disabled=True)
-        st.radio("Choose an available slot", INCUCYTE_SLOTS_FLAT, disabled=True)
-        st.form_submit_button("Submit", disabled=True)
-        
+    st.info("🔒 You must log in with your lab email to book or cancel equipment.")
 
 # -----------------------------
-# Hide everything else until login
+# Show Data Only if Logged In
 # -----------------------------
-if not st.session_state.user_email:
-    st.info("🔒 You must log in with your lab email to view bookings, calendar, and analytics.")
-else:
+if st.session_state.user_email:
     # -----------------------------
-    # Upcoming Bookings
+    # Upcoming Bookings (TABLE)
     # -----------------------------
     st.markdown("---")
     st.subheader("📋 Upcoming Bookings")
@@ -258,6 +250,11 @@ else:
     rows = []
     try:
         bookings_ref = db.collection("bookings").order_by("timestamp", direction=firestore.Query.DESCENDING)
+
+        # 🆕 Filter for non-admin users
+        if st.session_state.user_email not in ADMIN_EMAILS:
+            bookings_ref = bookings_ref.where("lab_name", "==", st.session_state.lab_name)
+
         for bk in bookings_ref.stream():
             d = bk.to_dict()
             if filter_equipment != "All" and d.get("equipment") != filter_equipment:
@@ -283,7 +280,7 @@ else:
         st.info("No bookings match your filters.")
 
     # -----------------------------
-    # Calendar
+    # Calendar View
     # -----------------------------
     st.markdown("---")
     st.subheader("📅 Equipment-Specific Calendar")
@@ -293,9 +290,13 @@ else:
     try:
         bookings_ref = db.collection("bookings").where("equipment", "==", equipment_for_calendar)
 
+        if st.session_state.user_email not in ADMIN_EMAILS:
+            bookings_ref = bookings_ref.where("lab_name", "==", st.session_state.lab_name)
+
         events = []
         for b in bookings_ref.stream():
             d = b.to_dict()
+
             if not d.get("start_date") or not d.get("end_date"):
                 continue
             try:
@@ -323,17 +324,24 @@ else:
         st.error(f"Error loading calendar: {e}")
 
     # -----------------------------
-    # Analytics + Drilldown
+    # 📊 Analytics Dashboard (Full)
     # -----------------------------
     st.markdown("---")
     st.subheader("📊 Analytics Dashboard")
 
     try:
-        all_bookings = list(db.collection("bookings").stream())
+        # Fetch all bookings
+        all_bookings_ref = db.collection("bookings")
+
+        if st.session_state.user_email not in ADMIN_EMAILS:
+            all_bookings_ref = all_bookings_ref.where("lab_name", "==", st.session_state.lab_name)
+
+        all_bookings = list(all_bookings_ref.stream())
 
         if not all_bookings:
             st.info("No bookings yet.")
         else:
+            # --- Global CSV export ---
             all_rows = []
             equipment_usage = {}
             hourly_usage = {}
@@ -372,8 +380,10 @@ else:
                     mime="text/csv"
                 )
 
+            # Summary metrics
             st.metric("Total Bookings", len(all_bookings))
 
+            # Equipment usage chart
             if equipment_usage:
                 st.markdown("### Most Used Equipment (Chart)")
                 eq_df = pd.DataFrame(
@@ -381,6 +391,7 @@ else:
                 ).sort_values("Bookings", ascending=False)
                 st.bar_chart(eq_df.set_index("Equipment"))
 
+            # Peak hours chart
             if hourly_usage:
                 st.markdown("### Peak Booking Hours (Chart)")
                 hr_df = pd.DataFrame(
@@ -388,7 +399,7 @@ else:
                 ).sort_values("Hour")
                 st.bar_chart(hr_df.set_index("Hour"))
 
-            # Drill-down details
+            # --- Drill-down with cancel controls + charts ---
             st.markdown("### Equipment Usage Details")
 
             if "detail_eq" not in st.session_state:
@@ -404,6 +415,8 @@ else:
 
             if detail_eq:
                 st.markdown(f"#### Details for {detail_eq}")
+
+                # Build details list
                 detail_rows = []
                 for b in all_bookings:
                     d = b.to_dict()
@@ -423,6 +436,8 @@ else:
                     st.info(f"No valid bookings for {detail_eq}.")
                 else:
                     ddf = pd.DataFrame(detail_rows)
+
+                    st.markdown("##### Bookings")
                     for _, row in ddf.iterrows():
                         c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
                         c1.write(row["User"])
@@ -431,17 +446,19 @@ else:
                         c4.write(f"{row['End Date']} {row['End Time']}")
                         c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
 
-                        if c6.button("❌", key=f"cancel_{row['DocID']}"):
-                            db.collection("bookings").document(row["DocID"]).delete()
-                            st.success(f"Booking for {row['User']} cancelled.")
-                            st.experimental_rerun()
+                        # 🆕 Restrict cancel to Admin or Same Lab
+                        if (st.session_state.user_email in ADMIN_EMAILS):
+                            if c6.button("❌", key=f"cancel_{row['DocID']}"):
+                                db.collection("bookings").document(row["DocID"]).delete()
+                                st.success(f"Booking for {row['User']} cancelled.")
+                                st.experimental_rerun()
 
                     # Charts
                     st.markdown("##### Usage Trend (Bookings over time)")
                     trend_df = (
                         ddf.groupby("Start Date").size()
-                           .rename("Bookings").reset_index()
-                           .sort_values("Start Date")
+                        .rename("Bookings").reset_index()
+                        .sort_values("Start Date")
                     )
                     if not trend_df.empty:
                         st.line_chart(trend_df.set_index("Start Date"))
@@ -450,9 +467,9 @@ else:
                     hour_series = ddf["Start Time"].str.extract(r"^(\d{1,2})")[0]
                     hour_counts = (
                         hour_series.value_counts()
-                                   .rename_axis("Hour")
-                                   .rename("Bookings")
-                                   .sort_index()
+                        .rename_axis("Hour")
+                        .rename("Bookings")
+                        .sort_index()
                     )
                     if not hour_counts.empty:
                         st.bar_chart(hour_counts)
@@ -461,12 +478,5 @@ else:
                         st.markdown("##### IncuCyte Slot Usage")
                         slot_counts = (
                             ddf["Slot"].replace("", "—")
-                                       .value_counts()
-                                       .rename_axis("Slot")
-                                       .rename("Bookings")
-                        )
-                        if not slot_counts.empty:
-                            st.bar_chart(slot_counts)
-
-    except Exception as e:
-        st.error(f"Error loading analytics: {e}")
+                            .value_counts()
+                           
