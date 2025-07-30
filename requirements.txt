@@ -2,5 +2,5 @@ streamlit
 firebase-admin
 pandas
 streamlit-calendar
-pip install matplotlib
+matplotlib
 
