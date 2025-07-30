@@ -5,6 +5,7 @@ from firebase_admin import credentials, firestore, auth
 import uuid
 import pandas as pd
 import io
+from streamlit_calendar import calendar
 
 # -----------------------------
 # Firebase init
@@ -50,7 +51,6 @@ else:
     login_password = st.text_input("Password (for email login)", type="password")
     if st.button("Sign In"):
         try:
-            # Validate user email
             user = auth.get_user_by_email(login_email)
             if login_email in ALLOWED_DOMAINS:
                 st.session_state.user_email = login_email
@@ -77,9 +77,6 @@ INCUCYTE_SLOTS = [
 ]
 INCUCYTE_SLOTS_FLAT = [s for row in INCUCYTE_SLOTS for s in row]
 
-# -----------------------------
-# Booking Form (enabled only for logged-in users)
-# -----------------------------
 def _parse_datetime_12h(date_obj, time_txt):
     try:
         return datetime.strptime(
@@ -89,7 +86,9 @@ def _parse_datetime_12h(date_obj, time_txt):
     except Exception:
         return None
 
-
+# -----------------------------
+# Booking Form (enabled only for logged-in users)
+# -----------------------------
 if st.session_state.user_email:
     st.markdown(f"### Booking for {st.session_state.lab_name}")
 
@@ -114,9 +113,7 @@ if st.session_state.user_email:
             req_end = _parse_datetime_12h(end_date, end_time_str)
 
             if req_start and req_end and req_start < req_end:
-                same_eq_q = db.collection("bookings") \
-                    .where("equipment", "==", "IncuCyte") \
-                    .stream()
+                same_eq_q = db.collection("bookings").where("equipment", "==", "IncuCyte").stream()
 
                 per_slot_bookings = {s: [] for s in INCUCYTE_SLOTS_FLAT}
                 for doc in same_eq_q:
@@ -179,7 +176,6 @@ if st.session_state.user_email:
                 st.warning("Please select an available tray slot for IncuCyte.")
                 st.stop()
 
-            # Double-booking check
             q = db.collection("bookings").where("equipment", "==", equipment)
             if equipment == "IncuCyte":
                 q = q.where("slot", "==", slot)
@@ -224,7 +220,6 @@ if st.session_state.user_email:
                 )
 
 else:
-    # Disabled form for public users
     st.markdown("### Booking Form (Disabled)")
     st.info("🔒 Log in above to book equipment.")
     with st.form("disabled_form"):
@@ -235,348 +230,236 @@ else:
         st.date_input("End Date", disabled=True)
         st.text_input("End Time (12hr)", disabled=True)
         st.radio("Choose an available slot", INCUCYTE_SLOTS_FLAT, disabled=True)
-        
-        # Add a disabled submit button
         st.form_submit_button("Submit", disabled=True)
 
-       # -----------------------------
-# Restrict booking form
 # -----------------------------
-    if st.session_state.user_email:
-    # 1. 📋 Upcoming Bookings
+# Hide everything else until login
+# -----------------------------
+if not st.session_state.user_email:
+    st.info("🔒 You must log in with your lab email to view bookings, calendar, and analytics.")
+else:
+    # -----------------------------
+    # Upcoming Bookings
+    # -----------------------------
     st.markdown("---")
     st.subheader("📋 Upcoming Bookings")
 
-# -----------------------------
-# Upcoming Bookings (TABLE)
-# -----------------------------
-st.markdown("---")
-st.subheader("📋 Upcoming Bookings")
+    filter_equipment = st.selectbox("Filter by Equipment", ["All"] + EQUIPMENT_LIST)
+    use_date_filter = st.checkbox("Filter by a specific date")
+    filter_date = st.date_input("Choose date", value=date_cls.today()) if use_date_filter else None
 
-filter_equipment = st.selectbox("Filter by Equipment", ["All"] + EQUIPMENT_LIST)
-use_date_filter = st.checkbox("Filter by a specific date")
-filter_date = st.date_input("Choose date", value=date_cls.today()) if use_date_filter else None
-
-rows = []
-try:
-    bookings_ref = db.collection("bookings").order_by("timestamp", direction=firestore.Query.DESCENDING)
-    for bk in bookings_ref.stream():
-        d = bk.to_dict()
-        if filter_equipment != "All" and d.get("equipment") != filter_equipment:
-            continue
-        if filter_date and d.get("start_date") != filter_date.strftime("%Y-%m-%d"):
-            continue
-        rows.append([
-            d.get("name", ""),
-            d.get("equipment", ""),
-            d.get("slot", "") if d.get("equipment") == "IncuCyte" else "",
-            d.get("start_date", ""),
-            d.get("start_time", ""),
-            d.get("end_date", ""),
-            d.get("end_time", "")
-        ])
-except Exception as e:
-    st.error(f"Error loading bookings: {e}")
-
-if rows:
-    df = pd.DataFrame(rows, columns=["Name", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"])
-    st.table(df)
-else:
-    st.info("No bookings match your filters.")
-
-# -----------------------------
-# Calendar View
-# -----------------------------
-from streamlit_calendar import calendar
-st.markdown("---")
-st.subheader("📅 Equipment-Specific Calendar")
-
-equipment_for_calendar = st.selectbox("Select Equipment to View", EQUIPMENT_LIST)
-
-try:
-    bookings_ref = db.collection("bookings") \
-        .where("equipment", "==", equipment_for_calendar)
-
-    events = []
-    for b in bookings_ref.stream():
-        d = b.to_dict()
-
-        if not d.get("start_date") or not d.get("end_date"):
-            continue
-        try:
-            start = datetime.strptime(d["start_date"], "%Y-%m-%d")
-            end = datetime.strptime(d["end_date"], "%Y-%m-%d")
-        except Exception:
-            continue
-
-        title = f"{d['equipment']} ({d['name']})"
-        slot_text = f" – {d['slot']}" if d.get("slot") else ""
-        events.append({
-            "title": title + slot_text,
-            "start": start.strftime("%Y-%m-%dT%H:%M:%S"),
-            "end": end.strftime("%Y-%m-%dT%H:%M:%S"),
-            "allDay": False,
-            "backgroundColor": "#1E90FF",
-            "borderColor": "#1E90FF",
-        })
-
-    if events:
-        calendar(events, options={"initialView": "dayGridMonth", "height": "600px"})
-    else:
-        st.info("No bookings yet.")
-except Exception as e:
-    st.error(f"Error loading calendar: {e}")
-
-# -----------------------------
-# 📊 Analytics Dashboard (Full)
-# -----------------------------
-import io
-
-st.markdown("---")
-st.subheader("📊 Analytics Dashboard")
-
-try:
-    # Fetch all bookings
-    all_bookings = list(db.collection("bookings").stream())
-
-    if not all_bookings:
-        st.info("No bookings yet.")
-    else:
-        # --- Global CSV export ---
-        all_rows = []
-        equipment_usage = {}
-        hourly_usage = {}
-
-        for bk in all_bookings:
+    rows = []
+    try:
+        bookings_ref = db.collection("bookings").order_by("timestamp", direction=firestore.Query.DESCENDING)
+        for bk in bookings_ref.stream():
             d = bk.to_dict()
-            all_rows.append([
+            if filter_equipment != "All" and d.get("equipment") != filter_equipment:
+                continue
+            if filter_date and d.get("start_date") != filter_date.strftime("%Y-%m-%d"):
+                continue
+            rows.append([
                 d.get("name", ""),
                 d.get("equipment", ""),
-                d.get("slot", "—"),
+                d.get("slot", "") if d.get("equipment") == "IncuCyte" else "",
                 d.get("start_date", ""),
                 d.get("start_time", ""),
                 d.get("end_date", ""),
                 d.get("end_time", "")
             ])
+    except Exception as e:
+        st.error(f"Error loading bookings: {e}")
 
-            eq = d.get("equipment", "Unknown")
-            equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
+    if rows:
+        df = pd.DataFrame(rows, columns=["Name", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"])
+        st.table(df)
+    else:
+        st.info("No bookings match your filters.")
 
-            if d.get("start_time"):
-                hour = d["start_time"].split(":")[0]
-                hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
+    # -----------------------------
+    # Calendar
+    # -----------------------------
+    st.markdown("---")
+    st.subheader("📅 Equipment-Specific Calendar")
 
-        # CSV export button
-        if all_rows:
-            csv_df = pd.DataFrame(
-                all_rows,
-                columns=["User", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"]
-            )
-            csv_buffer = io.StringIO()
-            csv_df.to_csv(csv_buffer, index=False)
-            st.download_button(
-                label="⬇️ Download All Bookings (CSV)",
-                data=csv_buffer.getvalue(),
-                file_name="all_bookings.csv",
-                mime="text/csv"
-            )
+    equipment_for_calendar = st.selectbox("Select Equipment to View", EQUIPMENT_LIST)
 
-        # Summary metrics
-        st.metric("Total Bookings", len(all_bookings))
+    try:
+        bookings_ref = db.collection("bookings").where("equipment", "==", equipment_for_calendar)
 
-        # Equipment usage chart
-        if equipment_usage:
-            st.markdown("### Most Used Equipment (Chart)")
-            eq_df = pd.DataFrame(
-                [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
-            ).sort_values("Bookings", ascending=False)
-            st.bar_chart(eq_df.set_index("Equipment"))
-
-        # Peak hours chart
-        if hourly_usage:
-            st.markdown("### Peak Booking Hours (Chart)")
-            hr_df = pd.DataFrame(
-                [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
-            ).sort_values("Hour")
-            st.bar_chart(hr_df.set_index("Hour"))
-
-        # --- Drill-down with cancel controls + charts ---
-        st.markdown("### Equipment Usage Details")
-
-        if "detail_eq" not in st.session_state:
-            st.session_state["detail_eq"] = None
-
-        for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
-            col1, col2 = st.columns([3, 1])
-            col1.write(f"**{eq}:** {count} bookings")
-            if col2.button("Details", key=f"{eq}_details"):
-                st.session_state["detail_eq"] = eq
-
-        detail_eq = st.session_state.get("detail_eq")
-
-        if detail_eq:
-            st.markdown(f"#### Details for {detail_eq}")
-
-            # Build details list
-            detail_rows = []
-            for b in all_bookings:
-                d = b.to_dict()
-                if d.get("equipment") != detail_eq:
-                    continue
-                detail_rows.append({
-                    "DocID": b.id,
-                    "User": d.get("name", ""),
-                    "Slot": d.get("slot", "—"),
-                    "Start Date": d.get("start_date", ""),
-                    "Start Time": d.get("start_time", ""),
-                    "End Date": d.get("end_date", ""),
-                    "End Time": d.get("end_time", "")
-                })
-
-            if not detail_rows:
-                st.info(f"No valid bookings for {detail_eq}.")
-            else:
-                ddf = pd.DataFrame(detail_rows)
-
-                st.markdown("##### Bookings")
-                for _, row in ddf.iterrows():
-                    c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
-                    c1.write(row["User"])
-                    c2.write(f"{row['Start Date']} {row['Start Time']}")
-                    c3.write("→")
-                    c4.write(f"{row['End Date']} {row['End Time']}")
-                    c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
-
-                    if c6.button("❌", key=f"cancel_{row['DocID']}"):
-                        db.collection("bookings").document(row["DocID"]).delete()
-                        st.success(f"Booking for {row['User']} cancelled.")
-                        st.experimental_rerun()
-
-                # Charts
-                st.markdown("##### Usage Trend (Bookings over time)")
-                trend_df = (
-                    ddf.groupby("Start Date").size()
-                       .rename("Bookings").reset_index()
-                       .sort_values("Start Date")
-                )
-                if not trend_df.empty:
-                    st.line_chart(trend_df.set_index("Start Date"))
-
-                st.markdown("##### Start Hour Distribution")
-                hour_series = ddf["Start Time"].str.extract(r"^(\d{1,2})")[0]
-                hour_counts = (
-                    hour_series.value_counts()
-                               .rename_axis("Hour")
-                               .rename("Bookings")
-                               .sort_index()
-                )
-                if not hour_counts.empty:
-                    st.bar_chart(hour_counts)
-
-                if detail_eq == "IncuCyte":
-                    st.markdown("##### IncuCyte Slot Usage")
-                    slot_counts = (
-                        ddf["Slot"].replace("", "—")
-                                   .value_counts()
-                                   .rename_axis("Slot")
-                                   .rename("Bookings")
-                    )
-                    if not slot_counts.empty:
-                        st.bar_chart(slot_counts)
-
-except Exception as e:
-    st.error(f"Error loading analytics: {e}")
-
-        # --- Drill-down with cancel controls + charts ---
-   st.markdown("---")
-    st.subheader("📊 Equipment Usage Details")
-
-    # Remember which equipment's details are open
-    if "detail_eq" not in st.session_state:
-        st.session_state["detail_eq"] = None
-
-    for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
-        col1, col2 = st.columns([3, 1])
-        col1.write(f"**{eq}:** {count} bookings")
-        if col2.button("Details", key=f"{eq}_details"):
-            st.session_state["detail_eq"] = eq
-
-    detail_eq = st.session_state.get("detail_eq")
-
-    if detail_eq:
-        st.markdown(f"#### Details for {detail_eq}")
-        else:
-    st.info("🔒 You must log in with your lab email to view bookings, calendar, and analytics.")
-
-        # Build data for selected equipment
-        detail_rows = []
-        for b in all_bookings:
+        events = []
+        for b in bookings_ref.stream():
             d = b.to_dict()
-            if d.get("equipment") != detail_eq:
-                continue
             if not d.get("start_date") or not d.get("end_date"):
                 continue
-            detail_rows.append({
-                "DocID": b.id,
-                "User": d.get("name", ""),
-                "Slot": d.get("slot", "—"),
-                "Start Date": d.get("start_date", ""),
-                "Start Time": d.get("start_time", ""),
-                "End Date": d.get("end_date", ""),
-                "End Time": d.get("end_time", "")
+            try:
+                start = datetime.strptime(d["start_date"], "%Y-%m-%d")
+                end = datetime.strptime(d["end_date"], "%Y-%m-%d")
+            except Exception:
+                continue
+
+            title = f"{d['equipment']} ({d['name']})"
+            slot_text = f" – {d['slot']}" if d.get("slot") else ""
+            events.append({
+                "title": title + slot_text,
+                "start": start.strftime("%Y-%m-%dT%H:%M:%S"),
+                "end": end.strftime("%Y-%m-%dT%H:%M:%S"),
+                "allDay": False,
+                "backgroundColor": "#1E90FF",
+                "borderColor": "#1E90FF",
             })
 
-        if not detail_rows:
-            st.info(f"No valid bookings for {detail_eq}.")
+        if events:
+            calendar(events, options={"initialView": "dayGridMonth", "height": "600px"})
         else:
-            ddf = pd.DataFrame(detail_rows)
+            st.info("No bookings yet.")
+    except Exception as e:
+        st.error(f"Error loading calendar: {e}")
 
-            # Table with cancel buttons
-            st.markdown("##### Bookings")
-            for _, row in ddf.iterrows():
-                c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
-                c1.write(row["User"])
-                c2.write(f"{row['Start Date']} {row['Start Time']}")
-                c3.write("→")
-                c4.write(f"{row['End Date']} {row['End Time']}")
-                c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
+    # -----------------------------
+    # Analytics + Drilldown
+    # -----------------------------
+    st.markdown("---")
+    st.subheader("📊 Analytics Dashboard")
 
-                if c6.button("❌", key=f"cancel_{row['DocID']}"):
-                    db.collection("bookings").document(row["DocID"]).delete()
-                    st.success(f"Booking for {row['User']} cancelled.")
-                    st.experimental_rerun()
+    try:
+        all_bookings = list(db.collection("bookings").stream())
 
-            # Charts
-            st.markdown("##### Usage Trend (Bookings over time)")
-            trend_df = (
-                ddf.groupby("Start Date").size()
-                   .rename("Bookings").reset_index()
-                   .sort_values("Start Date")
-            )
-            if not trend_df.empty:
-                st.line_chart(trend_df.set_index("Start Date"))
+        if not all_bookings:
+            st.info("No bookings yet.")
+        else:
+            all_rows = []
+            equipment_usage = {}
+            hourly_usage = {}
 
-            st.markdown("##### Start Hour Distribution")
-            hour_series = ddf["Start Time"].str.extract(r"^(\d{1,2})")[0]
-            hour_counts = (
-                hour_series.value_counts()
-                           .rename_axis("Hour")
-                           .rename("Bookings")
-                           .sort_index()
-            )
-            if not hour_counts.empty:
-                st.bar_chart(hour_counts)
+            for bk in all_bookings:
+                d = bk.to_dict()
+                all_rows.append([
+                    d.get("name", ""),
+                    d.get("equipment", ""),
+                    d.get("slot", "—"),
+                    d.get("start_date", ""),
+                    d.get("start_time", ""),
+                    d.get("end_date", ""),
+                    d.get("end_time", "")
+                ])
 
-            if detail_eq == "IncuCyte":
-                st.markdown("##### IncuCyte Slot Usage")
-                slot_counts = (
-                    ddf["Slot"].replace("", "—")
-                               .value_counts()
-                               .rename_axis("Slot")
-                               .rename("Bookings")
+                eq = d.get("equipment", "Unknown")
+                equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
+
+                if d.get("start_time"):
+                    hour = d["start_time"].split(":")[0]
+                    hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
+
+            # CSV export button
+            if all_rows:
+                csv_df = pd.DataFrame(
+                    all_rows,
+                    columns=["User", "Equipment", "Slot", "Start Date", "Start Time", "End Date", "End Time"]
                 )
-                if not slot_counts.empty:
-                    st.bar_chart(slot_counts)
+                csv_buffer = io.StringIO()
+                csv_df.to_csv(csv_buffer, index=False)
+                st.download_button(
+                    label="⬇️ Download All Bookings (CSV)",
+                    data=csv_buffer.getvalue(),
+                    file_name="all_bookings.csv",
+                    mime="text/csv"
+                )
 
-except Exception as e:
-    st.error(f"Error loading analytics: {e}")
+            st.metric("Total Bookings", len(all_bookings))
+
+            if equipment_usage:
+                st.markdown("### Most Used Equipment (Chart)")
+                eq_df = pd.DataFrame(
+                    [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
+                ).sort_values("Bookings", ascending=False)
+                st.bar_chart(eq_df.set_index("Equipment"))
+
+            if hourly_usage:
+                st.markdown("### Peak Booking Hours (Chart)")
+                hr_df = pd.DataFrame(
+                    [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
+                ).sort_values("Hour")
+                st.bar_chart(hr_df.set_index("Hour"))
+
+            # Drill-down details
+            st.markdown("### Equipment Usage Details")
+
+            if "detail_eq" not in st.session_state:
+                st.session_state["detail_eq"] = None
+
+            for eq, count in sorted(equipment_usage.items(), key=lambda x: x[1], reverse=True):
+                col1, col2 = st.columns([3, 1])
+                col1.write(f"**{eq}:** {count} bookings")
+                if col2.button("Details", key=f"{eq}_details"):
+                    st.session_state["detail_eq"] = eq
+
+            detail_eq = st.session_state.get("detail_eq")
+
+            if detail_eq:
+                st.markdown(f"#### Details for {detail_eq}")
+                detail_rows = []
+                for b in all_bookings:
+                    d = b.to_dict()
+                    if d.get("equipment") != detail_eq:
+                        continue
+                    detail_rows.append({
+                        "DocID": b.id,
+                        "User": d.get("name", ""),
+                        "Slot": d.get("slot", "—"),
+                        "Start Date": d.get("start_date", ""),
+                        "Start Time": d.get("start_time", ""),
+                        "End Date": d.get("end_date", ""),
+                        "End Time": d.get("end_time", "")
+                    })
+
+                if not detail_rows:
+                    st.info(f"No valid bookings for {detail_eq}.")
+                else:
+                    ddf = pd.DataFrame(detail_rows)
+                    for _, row in ddf.iterrows():
+                        c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
+                        c1.write(row["User"])
+                        c2.write(f"{row['Start Date']} {row['Start Time']}")
+                        c3.write("→")
+                        c4.write(f"{row['End Date']} {row['End Time']}")
+                        c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
+
+                        if c6.button("❌", key=f"cancel_{row['DocID']}"):
+                            db.collection("bookings").document(row["DocID"]).delete()
+                            st.success(f"Booking for {row['User']} cancelled.")
+                            st.experimental_rerun()
+
+                    # Charts
+                    st.markdown("##### Usage Trend (Bookings over time)")
+                    trend_df = (
+                        ddf.groupby("Start Date").size()
+                           .rename("Bookings").reset_index()
+                           .sort_values("Start Date")
+                    )
+                    if not trend_df.empty:
+                        st.line_chart(trend_df.set_index("Start Date"))
+
+                    st.markdown("##### Start Hour Distribution")
+                    hour_series = ddf["Start Time"].str.extract(r"^(\d{1,2})")[0]
+                    hour_counts = (
+                        hour_series.value_counts()
+                                   .rename_axis("Hour")
+                                   .rename("Bookings")
+                                   .sort_index()
+                    )
+                    if not hour_counts.empty:
+                        st.bar_chart(hour_counts)
+
+                    if detail_eq == "IncuCyte":
+                        st.markdown("##### IncuCyte Slot Usage")
+                        slot_counts = (
+                            ddf["Slot"].replace("", "—")
+                                       .value_counts()
+                                       .rename_axis("Slot")
+                                       .rename("Bookings")
+                        )
+                        if not slot_counts.empty:
+                            st.bar_chart(slot_counts)
+
+    except Exception as e:
+        st.error(f"Error loading analytics: {e}")
