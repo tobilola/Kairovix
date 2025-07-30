@@ -482,5 +482,5 @@ if st.session_state.user_email:
                                            .rename_axis("Slot")
                                            .rename("Bookings")
                             )
-                            if not slot_counts.empty:
+                     if not slot_counts.empty:
                                  st.bar_chart(slot_counts)
