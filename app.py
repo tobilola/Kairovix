@@ -29,6 +29,12 @@ if "user_email" not in st.session_state:
     st.session_state.user_email = None
     st.session_state.lab_name = None
 
+# Admin users (can see all labs)
+ADMIN_EMAILS = [
+    "youremail@example.com",  # Replace with your email
+    "anotheradmin@example.com"
+]
+
 # -----------------------------
 # Page setup
 # -----------------------------
@@ -231,6 +237,7 @@ else:
         st.text_input("End Time (12hr)", disabled=True)
         st.radio("Choose an available slot", INCUCYTE_SLOTS_FLAT, disabled=True)
         st.form_submit_button("Submit", disabled=True)
+        
 
 # -----------------------------
 # Hide everything else until login
