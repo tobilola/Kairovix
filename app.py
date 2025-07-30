@@ -7,6 +7,48 @@ import pandas as pd
 import io
 
 # -----------------------------
+# Multi-Lab Authentication
+# -----------------------------
+
+import streamlit as st
+from firebase_admin import auth
+
+# Lab domains (add more labs here)
+ALLOWED_DOMAINS = {
+    "adelaiogala.lab@gmail.com": "Adelaiye-Ogala Lab",  # you can use domain-based like "@adelaiogala.com"
+}
+
+if "user_email" not in st.session_state:
+    st.session_state.user_email = None
+    st.session_state.lab_name = None
+
+st.markdown("### 🔐 Sign In (Lab Members Only to Book)")
+
+if st.session_state.user_email:
+    st.success(f"Logged in as {st.session_state.user_email} ({st.session_state.lab_name})")
+    if st.button("Logout"):
+        st.session_state.user_email = None
+        st.session_state.lab_name = None
+        st.experimental_rerun()
+else:
+    login_email = st.text_input("Lab Email Address")
+    login_password = st.text_input("Password (for email login)", type="password")
+
+    if st.button("Sign In"):
+        try:
+            # Validate user email in Firebase
+            user = auth.get_user_by_email(login_email)
+
+            if login_email in ALLOWED_DOMAINS:
+                st.session_state.user_email = login_email
+                st.session_state.lab_name = ALLOWED_DOMAINS[login_email]
+                st.experimental_rerun()
+            else:
+                st.error("❌ Your email is not authorized for this system.")
+        except Exception as e:
+            st.error("❌ Invalid login or user not found in Firebase.")
+
+# -----------------------------
 # Firebase init
 # -----------------------------
 if not firebase_admin._apps:
@@ -176,6 +218,12 @@ with st.form("booking_form"):
                 f"{booking_data['start_date']} {booking_data['start_time']} "
                 f"to {booking_data['end_date']} {booking_data['end_time']}."
             )
+
+           if st.session_state.user_email:
+                st.markdown(f"### Booking for {st.session_state.lab_name}")
+            # Show booking form here
+           else:
+                st.warning("You must log in with your lab email to book or cancel equipment.")
 
 # -----------------------------
 # Upcoming Bookings (TABLE)
