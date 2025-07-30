@@ -14,17 +14,18 @@ import requests  # for REST login
 if not firebase_admin._apps:
     firebase_creds = dict(st.secrets["firebase"])
 
-    # Fix for malformed private key (escaped \n instead of real newlines)
+    # 🔑 Fix for malformed private key (escaped \n instead of real newlines)
     if "private_key" in firebase_creds:
         firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
 
-    # Ensure type is correct
+    # 🔐 Ensure the type is correctly set
     firebase_creds["type"] = "service_account"
 
-    # Initialize Admin SDK
+    # Initialize Firebase Admin SDK
     cred = credentials.Certificate(firebase_creds)
     firebase_admin.initialize_app(cred)
 
+# Firestore client
 db = firestore.client()
 
 # -----------------------------
