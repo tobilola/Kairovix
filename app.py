@@ -477,6 +477,10 @@ if st.session_state.user_email:
                     if detail_eq == "IncuCyte":
                         st.markdown("##### IncuCyte Slot Usage")
                         slot_counts = (
-                            ddf["Slot"].replace("", "—")
-                            .value_counts()
-                           
+                                ddf["Slot"].replace("", "—")
+                                           .value_counts()
+                                           .rename_axis("Slot")
+                                           .rename("Bookings")
+                            )
+                            if not slot_counts.empty:
+                                 st.bar_chart(slot_counts)
