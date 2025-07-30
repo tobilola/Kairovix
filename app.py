@@ -418,10 +418,14 @@ if st.session_state.user_email:
                         c4.write(f"{row['End Date']} {row['End Time']}")
                         c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
 
+                        # Show cancel button only for admin
+                    if st.session_state.user_email == "ogunbowaleadeola@gmail.com":
                         if c6.button("❌", key=f"cancel_{row['DocID']}"):
-                            db.collection("bookings").document(row["DocID"]).delete()
-                            st.success(f"Booking for {row['User']} cancelled.")
-                            st.experimental_rerun()
+                        db.collection("bookings").document(row["DocID"]).delete()
+                        st.success(f"Booking for {row['User']} cancelled.")
+                        st.experimental_rerun()
+                    else:
+                        c6.write("🔒")  # Show lock icon for non-admin users
 
                     st.markdown("##### Usage Trend (Bookings over time)")
                     trend_df = (
