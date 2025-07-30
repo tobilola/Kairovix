@@ -6,7 +6,7 @@ import uuid
 import pandas as pd
 import io
 from streamlit_calendar import calendar
-import requests  # <-- for REST login
+import requests  # for REST login
 
 # -----------------------------
 # Firebase init
@@ -23,10 +23,9 @@ db = firestore.client()
 # -----------------------------
 ALLOWED_DOMAINS = {
     "adelaogala.lab@gmail.com": "Adelaiye-Ogala Lab",  # add more lab emails or domains here
-    # Example for more labs:
+    # Example:
     # "someone@anotherlab.org": "Another Lab",
 }
-
 ADMIN_EMAIL = "ogunbowaleadeola@gmail.com"  # can cancel/delete bookings
 
 if "user_email" not in st.session_state:
@@ -48,7 +47,6 @@ def firebase_login(email: str, password: str):
     api_key = st.secrets["firebase"].get("apiKey")
     if not api_key:
         return {"error": {"message": "MISSING_API_KEY"}}
-
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
     try:
@@ -98,7 +96,7 @@ EQUIPMENT_LIST = [
 INCUCYTE_SLOTS = [
     ["Top Left", "Top Right"],
     ["Middle Left", "Middle Right"],
-    ["Bottom Left", "Bottom Right"]
+    ["Bottom Left", "Bottom Right"],
 ]
 INCUCYTE_SLOTS_FLAT = [s for row in INCUCYTE_SLOTS for s in row]
 
@@ -315,8 +313,7 @@ if st.session_state.user_email:
             if not d.get("start_date") or not d.get("end_date"):
                 continue
             try:
-                # If you want to include start/end times in the calendar, you could
-                # parse d['start_time']/d['end_time'] here and combine.
+                # To include start/end times precisely, parse times and combine here.
                 start = datetime.strptime(d["start_date"], "%Y-%m-%d")
                 end = datetime.strptime(d["end_date"], "%Y-%m-%d")
             except Exception:
