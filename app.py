@@ -235,6 +235,9 @@ else:
         st.date_input("End Date", disabled=True)
         st.text_input("End Time (12hr)", disabled=True)
         st.radio("Choose an available slot", INCUCYTE_SLOTS_FLAT, disabled=True)
+        
+        # Add a disabled submit button
+        st.form_submit_button("Submit", disabled=True)
 
        # -----------------------------
 # Restrict booking form
