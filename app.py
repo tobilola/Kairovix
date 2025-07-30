@@ -76,7 +76,7 @@ else:
                 if login_email in ALLOWED_DOMAINS or login_email == ADMIN_EMAIL:
                     st.session_state.user_email = login_email
                     st.session_state.lab_name = ALLOWED_DOMAINS.get(login_email, "Admin")
-                    st.experimental_rerun()
+                    
                 else:
                     st.error("❌ Your email is not authorized for this system.")
             else:
