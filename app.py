@@ -1,52 +1,10 @@
 import streamlit as st
 from datetime import datetime, date as date_cls
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 import uuid
 import pandas as pd
 import io
-
-# -----------------------------
-# Multi-Lab Authentication
-# -----------------------------
-
-import streamlit as st
-from firebase_admin import auth
-
-# Lab domains (add more labs here)
-ALLOWED_DOMAINS = {
-    "adelaiogala.lab@gmail.com": "Adelaiye-Ogala Lab",  # you can use domain-based like "@adelaiogala.com"
-}
-
-if "user_email" not in st.session_state:
-    st.session_state.user_email = None
-    st.session_state.lab_name = None
-
-st.markdown("### 🔐 Sign In (Lab Members Only to Book)")
-
-if st.session_state.user_email:
-    st.success(f"Logged in as {st.session_state.user_email} ({st.session_state.lab_name})")
-    if st.button("Logout"):
-        st.session_state.user_email = None
-        st.session_state.lab_name = None
-        st.experimental_rerun()
-else:
-    login_email = st.text_input("Lab Email Address")
-    login_password = st.text_input("Password (for email login)", type="password")
-
-    if st.button("Sign In"):
-        try:
-            # Validate user email in Firebase
-            user = auth.get_user_by_email(login_email)
-
-            if login_email in ALLOWED_DOMAINS:
-                st.session_state.user_email = login_email
-                st.session_state.lab_name = ALLOWED_DOMAINS[login_email]
-                st.experimental_rerun()
-            else:
-                st.error("❌ Your email is not authorized for this system.")
-        except Exception as e:
-            st.error("❌ Invalid login or user not found in Firebase.")
 
 # -----------------------------
 # Firebase init
@@ -59,12 +17,53 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # -----------------------------
+# Multi-Lab Authentication
+# -----------------------------
+ALLOWED_DOMAINS = {
+    "adelaiogala.lab@gmail.com": "Adelaiye-Ogala Lab",
+    # Add more lab emails or domains as needed
+}
+
+if "user_email" not in st.session_state:
+    st.session_state.user_email = None
+    st.session_state.lab_name = None
+
+# -----------------------------
 # Page setup
 # -----------------------------
 st.set_page_config(page_title="Kairovix – Lab Scheduler", layout="centered")
 st.title("🔬 Kairovix: Smart Lab Equipment Scheduler")
 st.markdown("Book time slots for lab equipment in real-time. Powered by **TOBI HealthOps AI**.")
 
+# -----------------------------
+# Login UI
+# -----------------------------
+if st.session_state.user_email:
+    st.success(f"Logged in as {st.session_state.user_email} ({st.session_state.lab_name})")
+    if st.button("Logout"):
+        st.session_state.user_email = None
+        st.session_state.lab_name = None
+        st.experimental_rerun()
+else:
+    st.warning("You must log in with your lab email to book or cancel equipment.")
+    login_email = st.text_input("Lab Email Address")
+    login_password = st.text_input("Password (for email login)", type="password")
+    if st.button("Sign In"):
+        try:
+            # Validate user email
+            user = auth.get_user_by_email(login_email)
+            if login_email in ALLOWED_DOMAINS:
+                st.session_state.user_email = login_email
+                st.session_state.lab_name = ALLOWED_DOMAINS[login_email]
+                st.experimental_rerun()
+            else:
+                st.error("❌ Your email is not authorized for this system.")
+        except Exception:
+            st.error("❌ Invalid login or user not found in Firebase.")
+
+# -----------------------------
+# Equipment list and slots
+# -----------------------------
 EQUIPMENT_LIST = [
     "IncuCyte", "Confocal Microscope", "Flow Cytometer",
     "Centrifuge", "Nanodrop", "Qubit 4", "QuantStudio 3",
@@ -79,145 +78,163 @@ INCUCYTE_SLOTS = [
 INCUCYTE_SLOTS_FLAT = [s for row in INCUCYTE_SLOTS for s in row]
 
 # -----------------------------
-# Booking Form
+# Booking Form (enabled only for logged-in users)
 # -----------------------------
-with st.form("booking_form"):
-    name = st.text_input("Your Name")
-    equipment = st.selectbox("Select Equipment", EQUIPMENT_LIST)
+def _parse_datetime_12h(date_obj, time_txt):
+    try:
+        return datetime.strptime(
+            f"{date_obj.strftime('%Y-%m-%d')} {time_txt.strip()}",
+            "%Y-%m-%d %I:%M %p"
+        )
+    except Exception:
+        return None
 
-    start_date = st.date_input("Start Date", value=date_cls.today())
-    start_time_str = st.text_input("Start Time (12hr)", placeholder="e.g. 09:00 AM")
 
-    end_date = st.date_input("End Date", value=date_cls.today())
-    end_time_str = st.text_input("End Time (12hr)", placeholder="e.g. 02:30 PM")
+if st.session_state.user_email:
+    st.markdown(f"### Booking for {st.session_state.lab_name}")
 
-    slot = None
-    booked_slots = set()
-    available_slots = INCUCYTE_SLOTS_FLAT
+    with st.form("booking_form"):
+        name = st.text_input("Your Name")
+        equipment = st.selectbox("Select Equipment", EQUIPMENT_LIST)
 
-    def _parse_datetime_12h(date_obj, time_txt):
-        try:
-            return datetime.strptime(
-                f"{date_obj.strftime('%Y-%m-%d')} {time_txt.strip()}",
-                "%Y-%m-%d %I:%M %p"
+        start_date = st.date_input("Start Date", value=date_cls.today())
+        start_time_str = st.text_input("Start Time (12hr)", placeholder="e.g. 09:00 AM")
+
+        end_date = st.date_input("End Date", value=date_cls.today())
+        end_time_str = st.text_input("End Time (12hr)", placeholder="e.g. 02:30 PM")
+
+        slot = None
+        booked_slots = set()
+        available_slots = INCUCYTE_SLOTS_FLAT
+
+        if equipment == "IncuCyte":
+            st.markdown("**IncuCyte Tray — availability for the selected date/time range**")
+
+            req_start = _parse_datetime_12h(start_date, start_time_str)
+            req_end = _parse_datetime_12h(end_date, end_time_str)
+
+            if req_start and req_end and req_start < req_end:
+                same_eq_q = db.collection("bookings") \
+                    .where("equipment", "==", "IncuCyte") \
+                    .stream()
+
+                per_slot_bookings = {s: [] for s in INCUCYTE_SLOTS_FLAT}
+                for doc in same_eq_q:
+                    d = doc.to_dict()
+                    s = d.get("slot")
+                    try:
+                        b_start = _parse_datetime_12h(
+                            datetime.strptime(d.get("start_date"), "%Y-%m-%d"),
+                            d.get("start_time")
+                        )
+                        b_end = _parse_datetime_12h(
+                            datetime.strptime(d.get("end_date"), "%Y-%m-%d"),
+                            d.get("end_time")
+                        )
+                    except Exception:
+                        continue
+                    if s and b_start and b_end:
+                        per_slot_bookings[s].append((b_start, b_end))
+
+                for s in INCUCYTE_SLOTS_FLAT:
+                    overlaps = any(not (req_end <= b_start or req_start >= b_end)
+                                for (b_start, b_end) in per_slot_bookings.get(s, []))
+                    if overlaps:
+                        booked_slots.add(s)
+
+                available_slots = [s for s in INCUCYTE_SLOTS_FLAT if s not in booked_slots]
+            else:
+                st.info("Enter valid start & end date/time to see slot availability.")
+
+            for row in INCUCYTE_SLOTS:
+                c1, c2 = st.columns(2)
+                for idx, s in enumerate(row):
+                    tag = "🔒 Booked" if s in booked_slots else "🟢 Available"
+                    (c1 if idx == 0 else c2).markdown(f"**{s}** — {tag}")
+
+            slot = st.radio(
+                "Choose an available slot",
+                options=(available_slots if available_slots else ["No slots available"]),
+                index=None,
+                key="incu_slot_choice"
             )
-        except Exception:
-            return None
 
-    if equipment == "IncuCyte":
-        st.markdown("**IncuCyte Tray — availability for the selected date/time range**")
+        submitted = st.form_submit_button("✅ Submit Booking")
 
-        req_start = _parse_datetime_12h(start_date, start_time_str)
-        req_end = _parse_datetime_12h(end_date, end_time_str)
+        if submitted:
+            if not name:
+                st.warning("Please enter your name before submitting.")
+                st.stop()
 
-        if req_start and req_end and req_start < req_end:
-            same_eq_q = db.collection("bookings") \
-                .where("equipment", "==", "IncuCyte") \
-                .stream()
+            s_dt = _parse_datetime_12h(start_date, start_time_str)
+            e_dt = _parse_datetime_12h(end_date, end_time_str)
+            if not s_dt or not e_dt:
+                st.error("Invalid date/time format. Use HH:MM AM/PM for time.")
+                st.stop()
+            if s_dt >= e_dt:
+                st.error("End date/time must be later than start date/time.")
+                st.stop()
 
-            per_slot_bookings = {s: [] for s in INCUCYTE_SLOTS_FLAT}
-            for doc in same_eq_q:
-                d = doc.to_dict()
-                s = d.get("slot")
+            if equipment == "IncuCyte" and (not slot or slot == "No slots available"):
+                st.warning("Please select an available tray slot for IncuCyte.")
+                st.stop()
+
+            # Double-booking check
+            q = db.collection("bookings").where("equipment", "==", equipment)
+            if equipment == "IncuCyte":
+                q = q.where("slot", "==", slot)
+
+            conflicts = []
+            for existing in q.stream():
+                d = existing.to_dict()
                 try:
-                    b_start = _parse_datetime_12h(
+                    ex_start = _parse_datetime_12h(
                         datetime.strptime(d.get("start_date"), "%Y-%m-%d"),
                         d.get("start_time")
                     )
-                    b_end = _parse_datetime_12h(
+                    ex_end = _parse_datetime_12h(
                         datetime.strptime(d.get("end_date"), "%Y-%m-%d"),
                         d.get("end_time")
                     )
                 except Exception:
                     continue
-                if s and b_start and b_end:
-                    per_slot_bookings[s].append((b_start, b_end))
 
-            for s in INCUCYTE_SLOTS_FLAT:
-                overlaps = any(not (req_end <= b_start or req_start >= b_end)
-                               for (b_start, b_end) in per_slot_bookings.get(s, []))
-                if overlaps:
-                    booked_slots.add(s)
+                if not (e_dt <= ex_start or s_dt >= ex_end):
+                    conflicts.append(d)
 
-            available_slots = [s for s in INCUCYTE_SLOTS_FLAT if s not in booked_slots]
-        else:
-            st.info("Enter valid start & end date/time to see slot availability.")
-
-        for row in INCUCYTE_SLOTS:
-            c1, c2 = st.columns(2)
-            for idx, s in enumerate(row):
-                tag = "🔒 Booked" if s in booked_slots else "🟢 Available"
-                (c1 if idx == 0 else c2).markdown(f"**{s}** — {tag}")
-
-        slot = st.radio(
-            "Choose an available slot",
-            options=(available_slots if available_slots else ["No slots available"]),
-            index=None,
-            key="incu_slot_choice"
-        )
-
-    submitted = st.form_submit_button("✅ Submit Booking")
-
-    if submitted:
-        if not name:
-            st.warning("Please enter your name before submitting.")
-            st.stop()
-
-        s_dt = _parse_datetime_12h(start_date, start_time_str)
-        e_dt = _parse_datetime_12h(end_date, end_time_str)
-        if not s_dt or not e_dt:
-            st.error("Invalid date/time format. Use HH:MM AM/PM for time.")
-            st.stop()
-        if s_dt >= e_dt:
-            st.error("End date/time must be later than start date/time.")
-            st.stop()
-
-        if equipment == "IncuCyte" and (not slot or slot == "No slots available"):
-            st.warning("Please select an available tray slot for IncuCyte.")
-            st.stop()
-
-        q = db.collection("bookings").where("equipment", "==", equipment)
-        if equipment == "IncuCyte":
-            q = q.where("slot", "==", slot)
-
-        conflicts = []
-        for existing in q.stream():
-            d = existing.to_dict()
-            try:
-                ex_start = _parse_datetime_12h(
-                    datetime.strptime(d.get("start_date"), "%Y-%m-%d"),
-                    d.get("start_time")
+            if conflicts:
+                st.error(f"❌ {equipment} {f'({slot}) ' if slot else ''}is already booked during that period.")
+            else:
+                booking_data = {
+                    "name": name.strip(),
+                    "equipment": equipment,
+                    "start_date": s_dt.strftime("%Y-%m-%d"),
+                    "start_time": s_dt.strftime("%I:%M %p"),
+                    "end_date": e_dt.strftime("%Y-%m-%d"),
+                    "end_time": e_dt.strftime("%I:%M %p"),
+                    "slot": slot if equipment == "IncuCyte" else None,
+                    "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                db.collection("bookings").document(str(uuid.uuid4())).set(booking_data)
+                st.success(
+                    f"✅ Booking confirmed for **{equipment}** "
+                    f"{f'({slot}) ' if slot else ''}from "
+                    f"{booking_data['start_date']} {booking_data['start_time']} "
+                    f"to {booking_data['end_date']} {booking_data['end_time']}."
                 )
-                ex_end = _parse_datetime_12h(
-                    datetime.strptime(d.get("end_date"), "%Y-%m-%d"),
-                    d.get("end_time")
-                )
-            except Exception:
-                continue
 
-            if not (e_dt <= ex_start or s_dt >= ex_end):
-                conflicts.append(d)
-
-        if conflicts:
-            st.error(f"❌ {equipment} {f'({slot}) ' if slot else ''}is already booked during that period.")
-        else:
-            booking_data = {
-                "name": name.strip(),
-                "equipment": equipment,
-                "start_date": s_dt.strftime("%Y-%m-%d"),
-                "start_time": s_dt.strftime("%I:%M %p"),
-                "end_date": e_dt.strftime("%Y-%m-%d"),
-                "end_time": e_dt.strftime("%I:%M %p"),
-                "slot": slot if equipment == "IncuCyte" else None,
-                "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            db.collection("bookings").document(str(uuid.uuid4())).set(booking_data)
-            st.success(
-                f"✅ Booking confirmed for **{equipment}** "
-                f"{f'({slot}) ' if slot else ''}from "
-                f"{booking_data['start_date']} {booking_data['start_time']} "
-                f"to {booking_data['end_date']} {booking_data['end_time']}."
-            )
+else:
+    # Disabled form for public users
+    st.markdown("### Booking Form (Disabled)")
+    st.info("🔒 Log in above to book equipment.")
+    with st.form("disabled_form"):
+        st.text_input("Your Name", disabled=True)
+        st.selectbox("Select Equipment", EQUIPMENT_LIST, disabled=True)
+        st.date_input("Start Date", disabled=True)
+        st.text_input("Start Time (12hr)", disabled=True)
+        st.date_input("End Date", disabled=True)
+        st.text_input("End Time (12hr)", disabled=True)
+        st.radio("Choose an available slot", INCUCYTE_SLOTS_FLAT, disabled=True)
 
        # -----------------------------
 # Restrict booking form
