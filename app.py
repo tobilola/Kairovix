@@ -435,42 +435,73 @@ if st.session_state.user_email == ADMIN_EMAIL:
 
                 st.dataframe(heatmap_df.style.background_gradient(cmap="Blues"))
 
-            # --- Drill-down details ---
-            st.markdown("### Equipment Usage Details")
-            if "detail_eq" not in st.session_state:
-                st.session_state["detail_eq"] = None
+          # --- Drill-down details ---
+st.markdown("### Equipment Usage Details")
 
-            for eq in filtered_df["Equipment"].unique():
-                col1, col2 = st.columns([3, 1])
-                col1.write(f"**{eq}:** {len(filtered_df[filtered_df['Equipment'] == eq])} bookings")
-                if col2.button("Details", key=f"{eq}_details"):
-                    st.session_state["detail_eq"] = eq
+# Ensure the DF exists and has expected columns
+required_cols = {"User", "Equipment", "Start Date", "Start Time", "End Date", "End Time"}
+missing_cols = required_cols - set(filtered_df.columns)
+if missing_cols:
+    st.warning(f"Some expected columns are missing from analytics data: {', '.join(sorted(missing_cols))}")
 
-            detail_eq = st.session_state.get("detail_eq")
-            if detail_eq:
-                st.markdown(f"#### Details for {detail_eq}")
+# Let user open details per equipment
+if "detail_eq" not in st.session_state:
+    st.session_state["detail_eq"] = None
 
-                detail_rows = filtered_df[filtered_df["Equipment"] == detail_eq]
-                if detail_rows.empty:
-                    st.info(f"No valid bookings for {detail_eq}.")
+# Equipment list derived from filtered_df
+for eq in sorted(filtered_df["Equipment"].dropna().unique()):
+    eq_count = len(filtered_df[filtered_df["Equipment"] == eq])
+    col1, col2 = st.columns([3, 1])
+    col1.write(f"**{eq}:** {eq_count} bookings")
+    if col2.button("Details", key=f"{eq}_details"):
+        st.session_state["detail_eq"] = eq
+
+detail_eq = st.session_state.get("detail_eq")
+if detail_eq:
+    st.markdown(f"#### Details for {detail_eq}")
+
+    # Subset rows for the chosen equipment
+    detail_rows = filtered_df[filtered_df["Equipment"] == detail_eq].copy()
+
+    if detail_rows.empty:
+        st.info(f"No valid bookings for {detail_eq}.")
+    else:
+        # Inform if DocID missing (we need it to delete)
+        has_doc_id = "DocID" in detail_rows.columns
+
+        if not has_doc_id:
+            st.warning("Delete disabled: this table has no `DocID` column. Include Firestore doc IDs when building the analytics dataframe to enable deletes.")
+
+        # Render rows with optional delete (admin-only)
+        for row in detail_rows.itertuples(index=False):
+            # Row fields as attributes: row.User, row.Equipment, row._asdict() also works
+            c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.9])
+            c1.write(getattr(row, "User", ""))
+            c2.write(f"{getattr(row, 'Start Date', '')} {getattr(row, 'Start Time', '')}")
+            c3.write("→")
+            c4.write(f"{getattr(row, 'End Date', '')} {getattr(row, 'End Time', '')}")
+
+            # Slot only matters for IncuCyte
+            slot_val = getattr(row, "Slot", "—")
+            c5.write(slot_val if detail_eq == "IncuCyte" and pd.notna(slot_val) and str(slot_val).strip() else "—")
+
+            # Admin-only delete
+            if st.session_state.user_email == ADMIN_EMAIL and has_doc_id:
+                doc_id = getattr(row, "DocID", None)
+                if doc_id:
+                    if c6.button("❌ Delete", key=f"delete_{doc_id}"):
+                        try:
+                            db.collection("bookings").document(doc_id).delete()
+                            st.success(f"✅ Deleted booking for {getattr(row, 'User', '')}.")
+                            safe_rerun()
+                        except Exception as e:
+                            st.error(f"Delete failed: {e}")
                 else:
-                    ddf = pd.DataFrame(detail_rows)
+                    c6.write("—")
+            else:
+                # Non-admin or missing DocID
+                c6.write("🔒")
 
-                    # Table + Cancel buttons
-                    for _, row in ddf.iterrows():
-                        c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.7])
-                        c1.write(row["User"])
-                        c2.write(f"{row['Start Date']} {row['Start Time']}")
-                        c3.write("→")
-                        c4.write(f"{row['End Date']} {row['End Time']}")
-                        c5.write(row["Slot"] if detail_eq == "IncuCyte" else "—")
-
-                        if st.session_state.user_email == ADMIN_EMAIL:
-                            if c6.button("❌", key=f"cancel_{row.name}"):
-                                # delete from Firestore using booking info (lookup required)
-                                st.warning("Delete logic to be implemented here.")
-                        else:
-                            c6.write("🔒")
 
     except Exception as e:
         st.error(f"Error loading analytics: {e}")
