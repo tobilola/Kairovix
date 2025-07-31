@@ -11,22 +11,26 @@ import requests  # for REST login
 # -----------------------------
 # Firebase init (robust)
 # -----------------------------
+db = None  # define it first so it's always available
+
 if not firebase_admin._apps:
-    firebase_creds = dict(st.secrets["firebase"])
-
-    # Ensure the private key is correctly formatted
-    if "private_key" in firebase_creds:
-        firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n").strip()
-
-    # Ensure type is correct
-    firebase_creds["type"] = "service_account"
-
-    # Initialize Firebase Admin SDK
     try:
+        firebase_creds = dict(st.secrets["firebase"])
+
+        # Fix newline issues only if the key is stored in one-line format
+        if "\\n" in firebase_creds["private_key"]:
+            firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
+
+        firebase_creds["type"] = "service_account"
+
         cred = credentials.Certificate(firebase_creds)
         firebase_admin.initialize_app(cred)
+
+        db = firestore.client()
     except Exception as e:
         st.error(f"❌ Firebase initialization failed: {e}")
+else:
+    db = firestore.client()
 
 # -----------------------------
 # Multi-Lab Authentication
