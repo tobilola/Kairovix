@@ -161,7 +161,13 @@ EQUIPMENT_LIST = [
     "Centrifuge", "Nanodrop", "Qubit 4", "QuantStudio 3",
     "Genesis SC", "Biorad ChemiDoc", "C1000 Touch"
 ]
-INCUCYTE_SLOTS = [["Top Left", "Top Right"], ["Middle Left", "Middle Right"], ["Bottom Left", "Bottom Right"]]
+
+# IncuCyte tray slots (grid)
+INCUCYTE_SLOTS = [
+    ["Top Left", "Top Right"],
+    ["Middle Left", "Middle Right"],
+    ["Bottom Left", "Bottom Right"]
+]
 INCUCYTE_SLOTS_FLAT = [s for row in INCUCYTE_SLOTS for s in row]
 
 # Fume Hood behaves like a slotted device with two hoods
@@ -197,8 +203,9 @@ if st.session_state.user_email:
 
             slot = None
             booked_slots = set()
-            available_slots = INCUCYTE_SLOTS_FLAT
+            available_slots = []
 
+            # --- IncuCyte (slotted) ---
             if equipment == "IncuCyte":
                 st.markdown("**IncuCyte Tray — availability for the selected date/time range**")
                 req_start = _parse_datetime_12h(start_date, start_time_str)
@@ -231,6 +238,7 @@ if st.session_state.user_email:
                 else:
                     st.info("Enter valid start & end date/time to see slot availability.")
 
+                # grid view
                 for row in INCUCYTE_SLOTS:
                     c1, c2 = st.columns(2)
                     for idx, s in enumerate(row):
@@ -244,6 +252,62 @@ if st.session_state.user_email:
                     key="incu_slot_choice"
                 )
 
+            # --- Fume Hood (slotted) ---
+            elif equipment == "Fume Hood":
+                st.markdown("**Fume Hood — choose hood for the selected date/time range**")
+                req_start = _parse_datetime_12h(start_date, start_time_str)
+                req_end = _parse_datetime_12h(end_date, end_time_str)
+
+                booked_slots = set()
+                available_slots = FUME_HOOD_SLOTS[:]
+
+                if req_start and req_end and req_start < req_end:
+                    try:
+                        same_eq_q = db.collection("bookings").where("equipment", "==", "Fume Hood").stream()
+                        per_slot_bookings = {s: [] for s in FUME_HOOD_SLOTS}
+                        for doc in same_eq_q:
+                            d = doc.to_dict()
+                            s = d.get("slot")
+                            if not s or s not in per_slot_bookings:
+                                continue
+                            try:
+                                b_start = _parse_datetime_12h(
+                                    datetime.strptime(d.get("start_date"), "%Y-%m-%d"),
+                                    d.get("start_time")
+                                )
+                                b_end = _parse_datetime_12h(
+                                    datetime.strptime(d.get("end_date"), "%Y-%m-%d"),
+                                    d.get("end_time")
+                                )
+                            except Exception:
+                                continue
+                            if b_start and b_end:
+                                per_slot_bookings[s].append((b_start, b_end))
+
+                        for s in FUME_HOOD_SLOTS:
+                            overlaps = any(not (req_end <= b_start or req_start >= b_end)
+                                           for (b_start, b_end) in per_slot_bookings.get(s, []))
+                            if overlaps:
+                                booked_slots.add(s)
+                        available_slots = [s for s in FUME_HOOD_SLOTS if s not in booked_slots]
+                    except Exception as e:
+                        st.warning(f"Could not load Fume Hood availability: {e}")
+                else:
+                    st.info("Enter valid start & end date/time to see hood availability.")
+
+                cols = st.columns(2)
+                cols[0].markdown(f"**Fume Hood 1** — {'🔒 Booked' if 'Fume Hood 1' in booked_slots else '🟢 Available'}")
+                cols[1].markdown(f"**Fume Hood 2** — {'🔒 Booked' if 'Fume Hood 2' in booked_slots else '🟢 Available'}")
+
+                slot = st.radio(
+                    "Choose a hood",
+                    options=(available_slots if available_slots else ["No hoods available"]),
+                    index=None,
+                    key="fume_hood_choice"
+                )
+
+            # non-slotted devices: no slot UI
+
             submitted = st.form_submit_button("✅ Submit Booking")
             if submitted:
                 s_dt = _parse_datetime_12h(start_date, start_time_str)
@@ -251,12 +315,17 @@ if st.session_state.user_email:
                 if not name or not s_dt or not e_dt or s_dt >= e_dt:
                     st.error("❌ Please fill all fields correctly.")
                     st.stop()
-                if equipment == "IncuCyte" and (not slot or slot == "No slots available"):
-                    st.warning("Please select an available tray slot for IncuCyte.")
-                    st.stop()
 
+                # Require a slot for slotted equipment
+                if equipment in SLOT_EQUIPMENT:
+                    none_label = "No slots available" if equipment == "IncuCyte" else "No hoods available"
+                    if not slot or slot == none_label:
+                        st.warning(f"Please select a slot for {equipment}.")
+                        st.stop()
+
+                # conflict query, include slot for slotted equipment
                 q = db.collection("bookings").where("equipment", "==", equipment)
-                if equipment == "IncuCyte":
+                if equipment in SLOT_EQUIPMENT:
                     q = q.where("slot", "==", slot)
 
                 conflicts = []
@@ -284,7 +353,7 @@ if st.session_state.user_email:
                         "start_time": s_dt.strftime("%I:%M %p"),
                         "end_date": e_dt.strftime("%Y-%m-%d"),
                         "end_time": e_dt.strftime("%I:%M %p"),
-                        "slot": slot if equipment == "IncuCyte" else None,
+                        "slot": slot if equipment in SLOT_EQUIPMENT else None,
                         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                     }
                     db.collection("bookings").document(str(uuid.uuid4())).set(booking_data)
@@ -306,10 +375,13 @@ if st.session_state.user_email:
                 if filter_date and d.get("start_date") != filter_date.strftime("%Y-%m-%d"):
                     continue
                 rows.append([
-                    d.get("name", ""), d.get("equipment", ""),
-                    d.get("slot", "") if d.get("equipment") == "IncuCyte" else "",
-                    d.get("start_date", ""), d.get("start_time", ""),
-                    d.get("end_date", ""), d.get("end_time", "")
+                    d.get("name", ""),
+                    d.get("equipment", ""),
+                    d.get("slot", "") if d.get("equipment") in SLOT_EQUIPMENT else "",
+                    d.get("start_date", ""),
+                    d.get("start_time", ""),
+                    d.get("end_date", ""),
+                    d.get("end_time", "")
                 ])
         except Exception as e:
             st.error(f"Error loading bookings: {e}")
@@ -390,7 +462,7 @@ if st.session_state.user_email == ADMIN_EMAIL:
                         hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
 
                 df = pd.DataFrame(rows)
-                filtered_df = df  # (apply any filters here later if you add them)
+                filtered_df = df  # (apply filters later if needed)
 
                 # 3) CSV export
                 if not df.empty:
@@ -423,14 +495,10 @@ if st.session_state.user_email == ADMIN_EMAIL:
                 # 5) --- Drill-down details with admin-only delete ---
                 st.markdown("### Equipment Usage Details")
 
-                # guard for required columns
-                required_cols = {"User", "Equipment", "Start Date", "Start Time", "End Date", "End Time"}
+                required_cols = {"DocID", "User", "Equipment", "Start Date", "Start Time", "End Date", "End Time", "Slot"}
                 missing_cols = required_cols - set(filtered_df.columns)
                 if missing_cols:
-                    st.warning(
-                        "Some expected columns are missing from analytics data: "
-                        + ", ".join(sorted(missing_cols))
-                    )
+                    st.warning("Some expected columns are missing from analytics data: " + ", ".join(sorted(missing_cols)))
 
                 if "detail_eq" not in st.session_state:
                     st.session_state["detail_eq"] = None
@@ -450,22 +518,16 @@ if st.session_state.user_email == ADMIN_EMAIL:
                     if detail_rows.empty:
                         st.info(f"No valid bookings for {detail_eq}.")
                     else:
-                        has_doc_id = "DocID" in detail_rows.columns
-                        if not has_doc_id:
-                            st.warning("Delete disabled: no `DocID` column in this table.")
-
-                        # Render rows with optional delete (admin-only)
                         for row in detail_rows.itertuples(index=False):
                             c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.9])
                             c1.write(getattr(row, "User", ""))
                             c2.write(f"{getattr(row, 'Start Date', '')} {getattr(row, 'Start Time', '')}")
                             c3.write("→")
                             c4.write(f"{getattr(row, 'End Date', '')} {getattr(row, 'End Time', '')}")
-
                             slot_val = getattr(row, "Slot", "—")
-                            c5.write(slot_val if detail_eq == "IncuCyte" and pd.notna(slot_val) and str(slot_val).strip() else "—")
+                            c5.write(slot_val if (detail_eq in SLOT_EQUIPMENT and pd.notna(slot_val) and str(slot_val).strip()) else "—")
 
-                            if st.session_state.user_email == ADMIN_EMAIL and has_doc_id:
+                            if st.session_state.user_email == ADMIN_EMAIL:
                                 doc_id = getattr(row, "DocID", None)
                                 if doc_id:
                                     if c6.button("❌ Delete", key=f"delete_{doc_id}"):
@@ -480,6 +542,19 @@ if st.session_state.user_email == ADMIN_EMAIL:
                             else:
                                 c6.write("🔒")
 
+                # Slot/Hood usage chart for slotted equipment
+                if detail_eq in SLOT_EQUIPMENT:
+                    st.markdown(f"##### {detail_eq} Slot / Hood Usage")
+                    slot_counts = (
+                        filtered_df[filtered_df["Equipment"] == detail_eq]["Slot"]
+                        .replace("", "—")
+                        .value_counts()
+                        .rename_axis("Slot")
+                        .rename("Bookings")
+                    )
+                    if not slot_counts.empty:
+                        st.bar_chart(slot_counts)
+
         except Exception as e:
             st.error(f"Error loading analytics: {e}")
 
@@ -489,3 +564,12 @@ else:
         st.info("🔒 Analytics is restricted to admin users.")
     else:
         st.info("🔒 You must log in with your lab email to access bookings and analytics.")
+
+# -----------------------------
+# Footer
+# -----------------------------
+st.markdown("---")
+st.markdown(
+    "<div style='text-align:center; opacity:0.8;'>Powered by <b>TOBI HealthOps AI</b></div>",
+    unsafe_allow_html=True,
+)
