@@ -157,12 +157,18 @@ else:
 # Equipment list and slots
 # -----------------------------
 EQUIPMENT_LIST = [
-    "IncuCyte", "Confocal Microscope", "Flow Cytometer",
+    "IncuCyte", "Fume Hood", "Flow Cytometer",
     "Centrifuge", "Nanodrop", "Qubit 4", "QuantStudio 3",
     "Genesis SC", "Biorad ChemiDoc", "C1000 Touch"
 ]
 INCUCYTE_SLOTS = [["Top Left", "Top Right"], ["Middle Left", "Middle Right"], ["Bottom Left", "Bottom Right"]]
 INCUCYTE_SLOTS_FLAT = [s for row in INCUCYTE_SLOTS for s in row]
+
+# Fume Hood behaves like a slotted device with two hoods
+FUME_HOOD_SLOTS = ["Fume Hood 1", "Fume Hood 2"]
+
+# For places where we show the slot column/logic
+SLOT_EQUIPMENT = {"IncuCyte", "Fume Hood"}
 
 def _parse_datetime_12h(date_obj, time_txt):
     try:
