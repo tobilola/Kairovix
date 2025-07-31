@@ -436,7 +436,7 @@ if st.session_state.user_email == ADMIN_EMAIL:
                 st.dataframe(heatmap_df.style.background_gradient(cmap="Blues"))
 
           # --- Drill-down details ---
-st.markdown("### Equipment Usage Details")
+    st.markdown("### Equipment Usage Details")
 
 # Ensure the DF exists and has expected columns
 required_cols = {"User", "Equipment", "Start Date", "Start Time", "End Date", "End Time"}
