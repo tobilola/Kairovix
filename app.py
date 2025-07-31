@@ -72,7 +72,7 @@ if "user_email" not in st.session_state:
 # -----------------------------
 st.set_page_config(page_title="Kairovix – Lab Scheduler", layout="centered")
 st.title("🔬 Kairovix: Smart Lab Equipment Scheduler")
-st.markdown("Book time slots for lab equipment in real-time. Powered by **TOBI HealthOps AI**.")
+st.markdown("Book time slots for lab equipment in real-time.")
 
 # -----------------------------
 # Helpers
