@@ -9,28 +9,51 @@ from streamlit_calendar import calendar
 import requests  # for REST login
 
 # -----------------------------
-# Firebase init (robust)
+# Firebase init (robust, PEM-safe)
 # -----------------------------
-db = None  # define it first so it's always available
+def init_firebase():
+    # If already initialized, reuse the existing app/client
+    if firebase_admin._apps:
+        return firestore.client()
 
-if not firebase_admin._apps:
+    # 1) Read secrets
     try:
-        firebase_creds = dict(st.secrets["firebase"])
+        fb = dict(st.secrets["firebase"])
+    except Exception:
+        st.error("❌ Missing [firebase] section in secrets. Add your service account + apiKey.")
+        st.stop()
 
-        # Fix newline issues only if the key is stored in one-line format
-        if "\\n" in firebase_creds["private_key"]:
-            firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
+    # 2) Make sure the service account key is correctly formatted
+    #    - Works whether the key is stored with real newlines or as '\n'
+    if "private_key" in fb and isinstance(fb["private_key"], str):
+        fb["private_key"] = fb["private_key"].replace("\\n", "\n").strip()
 
-        firebase_creds["type"] = "service_account"
+    # 3) Force the correct type
+    fb["type"] = "service_account"
 
-        cred = credentials.Certificate(firebase_creds)
+    # 4) Basic sanity checks to catch malformed keys early
+    pk = fb.get("private_key", "")
+    if not (pk.startswith("-----BEGIN PRIVATE KEY-----") and pk.endswith("-----END PRIVATE KEY-----")):
+        st.error("❌ Service account private_key looks malformed. "
+                 "Check that it starts with '-----BEGIN PRIVATE KEY-----' and ends with '-----END PRIVATE KEY-----'.")
+        st.stop()
+
+    # 5) Initialize Admin SDK
+    try:
+        cred = credentials.Certificate(fb)
         firebase_admin.initialize_app(cred)
-
-        db = firestore.client()
+        return firestore.client()
     except Exception as e:
         st.error(f"❌ Firebase initialization failed: {e}")
-else:
-    db = firestore.client()
+        st.stop()
+
+# Initialize once and reuse
+db = init_firebase()
+
+# Optional: warn if apiKey for email/password login is missing
+FIREBASE_WEB_API_KEY = st.secrets["firebase"].get("apiKey", "")
+if not FIREBASE_WEB_API_KEY:
+    st.warning("⚠️ Firebase Web apiKey not found in secrets. Email/password login will fail until you add it.")
 
 # -----------------------------
 # Multi-Lab Authentication
