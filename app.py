@@ -351,164 +351,135 @@ if st.session_state.user_email:
 # 📊 Analytics Dashboard (ADMIN ONLY)
 # -----------------------------
 if st.session_state.user_email == ADMIN_EMAIL:
-    st.markdown("---")
-    st.subheader("📊 Analytics Dashboard (Admin)")
-
-    try:
-        all_bookings = list(db.collection("bookings").stream())
-        if not all_bookings:
-            st.info("No bookings yet.")
-        else:
-            # Build dataframe from bookings
-            data = []
-            for bk in all_bookings:
-                d = bk.to_dict()
-                data.append({
-                    "User": d.get("name", ""),
-                    "Lab": ALLOWED_DOMAINS.get(d.get("email", ""), "Unknown Lab"),
-                    "Equipment": d.get("equipment", ""),
-                    "Slot": d.get("slot", "—"),
-                    "Start Date": d.get("start_date", ""),
-                    "Start Time": d.get("start_time", ""),
-                    "End Date": d.get("end_date", ""),
-                    "End Time": d.get("end_time", "")
-                })
-
-            df = pd.DataFrame(data)
-
-            # --- Filters ---
-            labs = ["All"] + sorted(df["Lab"].unique().tolist())
-            selected_lab = st.selectbox("Filter by Lab", labs)
-
-            use_date_filter = st.checkbox("Filter by Date Range")
-            date_range = None
-            if use_date_filter:
-                col1, col2 = st.columns(2)
-                with col1:
-                    start_date = st.date_input("Start Date", value=date_cls.today())
-                with col2:
-                    end_date = st.date_input("End Date", value=date_cls.today())
-                date_range = (start_date, end_date)
-
-            # Filter dataframe
-            filtered_df = df.copy()
-            if selected_lab != "All":
-                filtered_df = filtered_df[filtered_df["Lab"] == selected_lab]
-            if date_range:
-                filtered_df = filtered_df[
-                    (pd.to_datetime(filtered_df["Start Date"]) >= pd.to_datetime(date_range[0])) &
-                    (pd.to_datetime(filtered_df["End Date"]) <= pd.to_datetime(date_range[1]))
-                ]
-
-            # Export filtered CSV
-            csv_buffer = io.StringIO()
-            filtered_df.to_csv(csv_buffer, index=False)
-            st.download_button(
-                label="⬇️ Download Filtered Bookings (CSV)",
-                data=csv_buffer.getvalue(),
-                file_name="filtered_bookings.csv",
-                mime="text/csv"
-            )
-
-            # --- Metrics ---
-            st.metric("Total Bookings", len(filtered_df))
-            st.metric("Unique Labs", filtered_df["Lab"].nunique())
-
-            # --- Charts ---
-            st.markdown("### Bookings by Lab")
-            lab_counts = filtered_df["Lab"].value_counts()
-            if not lab_counts.empty:
-                st.bar_chart(lab_counts)
-
-            st.markdown("### Bookings by Equipment")
-            eq_counts = filtered_df["Equipment"].value_counts()
-            if not eq_counts.empty:
-                st.bar_chart(eq_counts)
-
-            # --- Heatmap for slot usage (IncuCyte only) ---
-            incucyte_df = filtered_df[filtered_df["Equipment"] == "IncuCyte"]
-            if not incucyte_df.empty:
-                st.markdown("### IncuCyte Slot Usage Heatmap")
-                slot_counts = incucyte_df["Slot"].value_counts()
-                heatmap_df = pd.DataFrame(slot_counts)
-                heatmap_df = heatmap_df.reindex(INCUCYTE_SLOTS_FLAT, fill_value=0).T
-
-                st.dataframe(heatmap_df.style.background_gradient(cmap="Blues"))
-
-          # --- Drill-down details ---
-    st.markdown("### Equipment Usage Details")
-
-# Ensure the DF exists and has expected columns
-required_cols = {"User", "Equipment", "Start Date", "Start Time", "End Date", "End Time"}
-missing_cols = required_cols - set(filtered_df.columns)
-if missing_cols:
-    st.warning(f"Some expected columns are missing from analytics data: {', '.join(sorted(missing_cols))}")
-
-# Let user open details per equipment
-if "detail_eq" not in st.session_state:
-    st.session_state["detail_eq"] = None
-
-# Equipment list derived from filtered_df
-for eq in sorted(filtered_df["Equipment"].dropna().unique()):
-    eq_count = len(filtered_df[filtered_df["Equipment"] == eq])
-    col1, col2 = st.columns([3, 1])
-    col1.write(f"**{eq}:** {eq_count} bookings")
-    if col2.button("Details", key=f"{eq}_details"):
-        st.session_state["detail_eq"] = eq
-
-detail_eq = st.session_state.get("detail_eq")
-if detail_eq:
-    st.markdown(f"#### Details for {detail_eq}")
-
-    # Subset rows for the chosen equipment
-    detail_rows = filtered_df[filtered_df["Equipment"] == detail_eq].copy()
-
-    if detail_rows.empty:
-        st.info(f"No valid bookings for {detail_eq}.")
-    else:
-        # Inform if DocID missing (we need it to delete)
-        has_doc_id = "DocID" in detail_rows.columns
-
-        if not has_doc_id:
-            st.warning("Delete disabled: this table has no `DocID` column. Include Firestore doc IDs when building the analytics dataframe to enable deletes.")
-
-        # Render rows with optional delete (admin-only)
-        for row in detail_rows.itertuples(index=False):
-            # Row fields as attributes: row.User, row.Equipment, row._asdict() also works
-            c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.9])
-            c1.write(getattr(row, "User", ""))
-            c2.write(f"{getattr(row, 'Start Date', '')} {getattr(row, 'Start Time', '')}")
-            c3.write("→")
-            c4.write(f"{getattr(row, 'End Date', '')} {getattr(row, 'End Time', '')}")
-
-            # Slot only matters for IncuCyte
-            slot_val = getattr(row, "Slot", "—")
-            c5.write(slot_val if detail_eq == "IncuCyte" and pd.notna(slot_val) and str(slot_val).strip() else "—")
-
-            # Admin-only delete
-            if st.session_state.user_email == ADMIN_EMAIL and has_doc_id:
-                doc_id = getattr(row, "DocID", None)
-                if doc_id:
-                    if c6.button("❌ Delete", key=f"delete_{doc_id}"):
-                        try:
-                            db.collection("bookings").document(doc_id).delete()
-                            st.success(f"✅ Deleted booking for {getattr(row, 'User', '')}.")
-                            safe_rerun()
-                        except Exception as e:
-                            st.error(f"Delete failed: {e}")
-                else:
-                    c6.write("—")
+    with st.expander("📊 Analytics Dashboard (Admin)", expanded=False):
+        try:
+            # 1) Pull all bookings once
+            snapshots = list(db.collection("bookings").stream())
+            if not snapshots:
+                st.info("No bookings yet.")
             else:
-                # Non-admin or missing DocID
-                c6.write("🔒")
+                # 2) Build a dataframe that INCLUDES DocID for deletes
+                rows = []
+                equipment_usage = {}
+                hourly_usage = {}
 
+                for doc in snapshots:
+                    d = doc.to_dict()
+                    rows.append({
+                        "DocID": doc.id,
+                        "User": d.get("name", ""),
+                        "Equipment": d.get("equipment", ""),
+                        "Slot": d.get("slot", "—"),
+                        "Start Date": d.get("start_date", ""),
+                        "Start Time": d.get("start_time", ""),
+                        "End Date": d.get("end_date", ""),
+                        "End Time": d.get("end_time", "")
+                    })
 
-    except Exception as e:
-        st.error(f"Error loading analytics: {e}")
+                    eq = d.get("equipment", "Unknown")
+                    equipment_usage[eq] = equipment_usage.get(eq, 0) + 1
 
+                    if d.get("start_time"):
+                        hour = d["start_time"].split(":")[0]
+                        hourly_usage[hour] = hourly_usage.get(hour, 0) + 1
 
-    else:
-        st.info("🔒 Analytics is restricted to admin users.")
+                df = pd.DataFrame(rows)
+                filtered_df = df  # (apply any filters here later if you add them)
+
+                # 3) CSV export
+                if not df.empty:
+                    csv_buffer = io.StringIO()
+                    df.to_csv(csv_buffer, index=False)
+                    st.download_button(
+                        "⬇️ Download All Bookings (CSV)",
+                        csv_buffer.getvalue(),
+                        "all_bookings.csv",
+                        mime="text/csv"
+                    )
+
+                # 4) Summary & charts
+                st.metric("Total Bookings", len(df))
+
+                if equipment_usage:
+                    st.markdown("### Most Used Equipment (Chart)")
+                    eq_df = pd.DataFrame(
+                        [{"Equipment": k, "Bookings": v} for k, v in equipment_usage.items()]
+                    ).sort_values("Bookings", ascending=False)
+                    st.bar_chart(eq_df.set_index("Equipment"))
+
+                if hourly_usage:
+                    st.markdown("### Peak Booking Hours (Chart)")
+                    hr_df = pd.DataFrame(
+                        [{"Hour": k, "Bookings": v} for k, v in hourly_usage.items()]
+                    ).sort_values("Hour")
+                    st.bar_chart(hr_df.set_index("Hour"))
+
+                # 5) --- Drill-down details with admin-only delete ---
+                st.markdown("### Equipment Usage Details")
+
+                # guard for required columns
+                required_cols = {"User", "Equipment", "Start Date", "Start Time", "End Date", "End Time"}
+                missing_cols = required_cols - set(filtered_df.columns)
+                if missing_cols:
+                    st.warning(
+                        "Some expected columns are missing from analytics data: "
+                        + ", ".join(sorted(missing_cols))
+                    )
+
+                if "detail_eq" not in st.session_state:
+                    st.session_state["detail_eq"] = None
+
+                for eq in sorted(filtered_df["Equipment"].dropna().unique()):
+                    eq_count = len(filtered_df[filtered_df["Equipment"] == eq])
+                    col1, col2 = st.columns([3, 1])
+                    col1.write(f"**{eq}:** {eq_count} bookings")
+                    if col2.button("Details", key=f"{eq}_details"):
+                        st.session_state["detail_eq"] = eq
+
+                detail_eq = st.session_state.get("detail_eq")
+                if detail_eq:
+                    st.markdown(f"#### Details for {detail_eq}")
+
+                    detail_rows = filtered_df[filtered_df["Equipment"] == detail_eq].copy()
+                    if detail_rows.empty:
+                        st.info(f"No valid bookings for {detail_eq}.")
+                    else:
+                        has_doc_id = "DocID" in detail_rows.columns
+                        if not has_doc_id:
+                            st.warning("Delete disabled: no `DocID` column in this table.")
+
+                        # Render rows with optional delete (admin-only)
+                        for row in detail_rows.itertuples(index=False):
+                            c1, c2, c3, c4, c5, c6 = st.columns([2.5, 2, 0.5, 2, 1.5, 0.9])
+                            c1.write(getattr(row, "User", ""))
+                            c2.write(f"{getattr(row, 'Start Date', '')} {getattr(row, 'Start Time', '')}")
+                            c3.write("→")
+                            c4.write(f"{getattr(row, 'End Date', '')} {getattr(row, 'End Time', '')}")
+
+                            slot_val = getattr(row, "Slot", "—")
+                            c5.write(slot_val if detail_eq == "IncuCyte" and pd.notna(slot_val) and str(slot_val).strip() else "—")
+
+                            if st.session_state.user_email == ADMIN_EMAIL and has_doc_id:
+                                doc_id = getattr(row, "DocID", None)
+                                if doc_id:
+                                    if c6.button("❌ Delete", key=f"delete_{doc_id}"):
+                                        try:
+                                            db.collection("bookings").document(doc_id).delete()
+                                            st.success(f"✅ Deleted booking for {getattr(row, 'User', '')}.")
+                                            safe_rerun()
+                                        except Exception as e:
+                                            st.error(f"Delete failed: {e}")
+                                else:
+                                    c6.write("—")
+                            else:
+                                c6.write("🔒")
+
+        except Exception as e:
+            st.error(f"Error loading analytics: {e}")
 
 else:
-    st.info("🔒 You must log in with your lab email to access bookings and analytics.")
+    # logged-in but not admin: keep the gentle note
+    if st.session_state.user_email:
+        st.info("🔒 Analytics is restricted to admin users.")
+    else:
+        st.info("🔒 You must log in with your lab email to access bookings and analytics.")
